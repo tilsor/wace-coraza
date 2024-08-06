@@ -1,6 +1,6 @@
 module gitlab.fing.edu.uy/gsi/pgrado-wace/poc
 
-go 1.20
+go 1.22.2
 
 require github.com/corazawaf/coraza/v3 v3.1.0
 
