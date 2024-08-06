@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	waceWAF "gitlab.fing.edu.uy/gsi/pgrado-wace/poc/waceWAF"
+
 	"github.com/corazawaf/coraza/v3"
 	txhttp "github.com/corazawaf/coraza/v3/http"
 	"github.com/corazawaf/coraza/v3/types"
@@ -43,8 +45,10 @@ func createWAF() coraza.WAF {
 	cfg := coraza.NewWAFConfig().
 		WithDirectivesFromFile("coraza.conf").
 		WithDirectivesFromFile("coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("coreruleset/rules/*.conf")
-	waf, err := coraza.NewWAF(cfg)
+		WithDirectivesFromFile("coreruleset/rules/*.conf").
+		WithDirectives("SecRuleRemoveById 949110").
+		WithDirectives("SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:949112, phase:2, deny, t:none, msg:'%{TX.BLOCKING_INBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\"")
+	waf, err := waceWAF.NewWAF(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
