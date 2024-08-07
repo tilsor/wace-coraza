@@ -27,12 +27,12 @@ type WaceTransaction struct {
 
 // TODO: Parametrize the path to the waceconfig.yaml file
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
-	wace.Init("../wace/waceconfig.yaml")
+	wace.Init("../Pruebas/ModSecIntl_wace_core/waceconfig.yaml")
 	waceConfig := NewWaceConfig()
 	waf, err := coraza.NewWAF(config.
-		WithDirectives("SecRuleUpdateById 949110 pass").
+		WithDirectives("SecRuleUpdateActionById 949110 pass").
 		WithDirectives("SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:949112, phase:2, deny, t:none, msg:'%{TX.BLOCKING_INBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\"").
-		WithDirectives("SecRuleUpdateById 959100 pass").
+		WithDirectives("SecRuleUpdateActionById 959100 pass").
 		WithDirectives("SecRule TX:BLOCKING_OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_threshold}\" \"id:959102, phase:4, deny, t:none, msg:'%{TX.BLOCKING_OUTBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\""))
 	return &WaceWAF{waf, waceConfig}, err
 }
