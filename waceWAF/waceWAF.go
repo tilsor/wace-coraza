@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
@@ -17,12 +18,12 @@ type WaceWAF struct {
 type WaceTransaction struct {
 	types.Transaction
 	waf             *WaceWAF
-	requestLine     string
-	requestHeaders  string
-	requestBody     string
-	responseLine    string
-	responseHeaders string
-	responseBody    string
+	requestLine     *string
+	requestHeaders  *string
+	requestBody     *string
+	responseLine    *string
+	responseHeaders *string
+	responseBody    *string
 }
 
 // TODO: Parametrize the path to the waceconfig.yaml file
@@ -37,25 +38,37 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	return &WaceWAF{waf, waceConfig}, err
 }
 
-// Override the NewTransaction method provided by Coraza WAF to return a new WaceTransaction transaction
+// Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction
 // TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
-	return WaceTransaction{w.WAF.NewTransaction(), w, "", "", "", "", "", ""}
+
+	return WaceTransaction{w.WAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
+}
+
+func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion string){
+	t.Transaction.ProcessURI(uri, method, httpVersion)
+	*t.requestLine = method + " " + uri + " " + httpVersion
+}
+
+// TODO: Analyze if the interface SetServerName of the transaction should be implemented
+func (t WaceTransaction) SetServerName(serverName string) {
+	t.Transaction.SetServerName(serverName)
+	*t.requestHeaders += "Server: " + serverName + "\n"
 }
 
 // TODO: Check how the headers are appended to the variable
 func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	t.Transaction.AddRequestHeader(key, value)
-	t.requestHeaders += key + ": " + value + "\n"
+	*t.requestHeaders += key + ": " + value + "\n"
 }
 
-// Override the ProcessRequestHeaders method provided by Coraza WAF to process request headers by WACE and Coraza
+// Implements the ProcessRequestHeaders interface provided by Coraza WAF to process request headers by WACE and Coraza
 // TODO: Add early check for phase 1
 func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	go func() {
 		fmt.Println("[DEBUG][WACE] Processing request headers by WACE and Coraza")
-		wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), t.requestLine, t.requestHeaders, t.waf.waceConfig.reqHeadModelIDs)
+		wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, t.waf.waceConfig.reqHeadModelIDs)
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
@@ -63,15 +76,26 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	return interruption
 }
 
-// Override the ProcessRequestBody method provided by Coraza WAF to process request body by WACE and Coraza
+// TODO: Analyze if these actions can be done in parallel
+func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, int, error){
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	*t.requestBody = string(b)
+	return t.Transaction.ReadRequestBodyFrom(r)
+}
+
+
+// Implements the ProcessRequestBody interface provided by Coraza WAF to process request body by WACE and Coraza
 func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	go func() {
 		fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
-		wace.AnalyzeRequestBody(t.Transaction.ID(), t.requestBody, t.waf.waceConfig.reqBodyModelIDs)
+		wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, t.waf.waceConfig.reqBodyModelIDs)
 	}()
 	go func() {
 		fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
-		wace.AnalyzeRequest(t.Transaction.ID(), t.requestLine+"\n"+t.requestHeaders+"\n"+t.requestBody, t.waf.waceConfig.reqBodyModelIDs)
+		wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+ *t.requestHeaders+"\n"+ *t.requestBody, t.waf.waceConfig.reqBodyModelIDs)
 	}()
 	interruption, err := t.Transaction.ProcessRequestBody()
 
@@ -95,19 +119,31 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	return interruption, err
 }
 
-// Override the ProcessResponseHeaders method provided by Coraza WAF to process response headers by WACE and Coraza
+func (t WaceTransaction) AddResponseHeader(key string, value string) {
+	t.Transaction.AddResponseHeader(key, value)
+	*t.responseHeaders += key + ": " + value + "\n"
+}
+
+// Implements the ProcessResponseHeaders interface provided by Coraza WAF to process response headers by WACE and Coraza
+// TODO: Check for a better function to parse status code
 func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.Interruption {
+	*t.responseLine = proto + " " + fmt.Sprint(code)
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
 	return interruption
 }
 
-// Override the ProcessResponseBody method provided by Coraza WAF to process response body by WACE and Coraza
+// TODO: Analyze if these actions can be done in parallel
+func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, error){
+	*t.responseBody = string(b)
+	return t.Transaction.WriteResponseBody(b)
+}
+
+// Implements the ProcessResponseBody interface provided by Coraza WAF to process response body by WACE and Coraza
 func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	interruption, err := t.Transaction.ProcessResponseBody()
 	return interruption, err
 }
 
 func (t WaceTransaction) ProcessLogging() {
-	fmt.Println("[DEBUG][WACE] Processing logging")
 	t.Transaction.ProcessLogging()
 }
