@@ -12,6 +12,7 @@ import (
 
 type WaceWAF struct {
 	coraza.WAF
+	exceptionWAF coraza.WAF
 	waceConfig *WaceConfig
 }
 
@@ -30,12 +31,22 @@ type WaceTransaction struct {
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	wace.Init("../Pruebas/ModSecIntl_wace_core/waceconfig.yaml")
 	waceConfig := NewWaceConfig()
-	waf, err := coraza.NewWAF(config.
+
+	wafConfigs, ok := config.(*waceWAFConfig)
+
+	if !ok {
+		return nil, fmt.Errorf("Error casting to waceWAFConfig")
+	}
+
+	waf, err := coraza.NewWAF(wafConfigs.WAFConfig.
 		WithDirectives("SecRuleUpdateActionById 949110 pass").
 		WithDirectives("SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:949112, phase:2, deny, t:none, msg:'%{TX.BLOCKING_INBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\"").
 		WithDirectives("SecRuleUpdateActionById 959100 pass").
 		WithDirectives("SecRule TX:BLOCKING_OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_threshold}\" \"id:959102, phase:4, deny, t:none, msg:'%{TX.BLOCKING_OUTBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\""))
-	return &WaceWAF{waf, waceConfig}, err
+
+	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
+
+	return &WaceWAF{waf, exceptionsWaf, waceConfig}, err
 }
 
 // Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction

@@ -1,8 +1,14 @@
 package waceWAF
 
 import (
+	"github.com/corazawaf/coraza/v3"
 	cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
 )
+
+type waceWAFConfig struct {
+	coraza.WAFConfig
+	exceptionsConfig coraza.WAFConfig
+}
 
 type WaceConfig struct {
 	reqHeadModelIDs  []string
@@ -37,4 +43,17 @@ func NewWaceConfig() *WaceConfig {
 		}
 	}
 	return &WaceConfig{reqHeadModelIDs, reqBodyModelIDs, reqModelIDs, respHeadModelIDs, respBodyModelIDs, respModelIDs}
+}
+
+func NewWAFConfig() coraza.WAFConfig {
+	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig()}
+}
+
+func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFConfig {
+	if filePath == "exceptions.conf" {
+		conf.exceptionsConfig = conf.exceptionsConfig.WithDirectivesFromFile(filePath)
+	} else {
+		conf.WAFConfig = conf.WAFConfig.WithDirectivesFromFile(filePath)
+	}
+	return conf
 }
