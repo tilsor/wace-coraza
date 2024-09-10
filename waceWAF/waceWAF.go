@@ -18,6 +18,7 @@ type WaceWAF struct {
 
 type WaceTransaction struct {
 	types.Transaction
+	exceptionTransaction types.Transaction
 	waf             *WaceWAF
 	requestLine     *string
 	requestHeaders  *string
@@ -54,23 +55,26 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
 
-	return WaceTransaction{w.WAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
+	return WaceTransaction{w.WAF.NewTransaction(), w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
 }
 
 func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion string){
 	t.Transaction.ProcessURI(uri, method, httpVersion)
+	t.exceptionTransaction.ProcessURI(uri, method, httpVersion)
 	*t.requestLine = method + " " + uri + " " + httpVersion
 }
 
 // TODO: Analyze if the interface SetServerName of the transaction should be implemented
 func (t WaceTransaction) SetServerName(serverName string) {
 	t.Transaction.SetServerName(serverName)
+	t.exceptionTransaction.SetServerName(serverName)
 	*t.requestHeaders += "Server: " + serverName + "\n"
 }
 
 // TODO: Check how the headers are appended to the variable
 func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	t.Transaction.AddRequestHeader(key, value)
+	t.exceptionTransaction.AddRequestHeader(key, value)
 	*t.requestHeaders += key + ": " + value + "\n"
 }
 
@@ -94,7 +98,16 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 		return nil, 0, err
 	}
 	*t.requestBody = string(b)
-	return t.Transaction.ReadRequestBodyFrom(r)
+
+	interruption, cantB, err := t.exceptionTransaction.ReadRequestBodyFrom(r)
+
+	if err != nil {
+		return interruption, 0, err
+	}
+
+	interruption, cantB, err = t.Transaction.ReadRequestBodyFrom(r)
+
+	return interruption, cantB, err
 }
 
 
@@ -132,6 +145,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 
 func (t WaceTransaction) AddResponseHeader(key string, value string) {
 	t.Transaction.AddResponseHeader(key, value)
+	t.exceptionTransaction.AddResponseHeader(key, value)
 	*t.responseHeaders += key + ": " + value + "\n"
 }
 
@@ -146,7 +160,16 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 // TODO: Analyze if these actions can be done in parallel
 func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, error){
 	*t.responseBody = string(b)
-	return t.Transaction.WriteResponseBody(b)
+
+	interruption, cantB, err := t.exceptionTransaction.WriteResponseBody(b)
+
+	if err != nil {
+		return interruption, 0, err
+	}
+
+	interruption, cantB, err = t.Transaction.WriteResponseBody(b)
+
+	return interruption, cantB, err
 }
 
 // Implements the ProcessResponseBody interface provided by Coraza WAF to process response body by WACE and Coraza
