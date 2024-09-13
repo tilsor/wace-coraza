@@ -45,6 +45,10 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		WithDirectives("SecRuleUpdateActionById 959100 pass").
 		WithDirectives("SecRule TX:BLOCKING_OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_threshold}\" \"id:959102, phase:4, deny, t:none, msg:'%{TX.BLOCKING_OUTBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\""))
 
+	if wafConfigs.wantExceptions {
+		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives("exceptions.conf", waceConfig)
+	}
+	
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
 
 	return &WaceWAF{waf, exceptionsWaf, waceConfig}, err

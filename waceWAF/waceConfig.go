@@ -7,6 +7,7 @@ import (
 
 type waceWAFConfig struct {
 	coraza.WAFConfig
+	wantExceptions bool
 	exceptionsConfig coraza.WAFConfig
 }
 
@@ -46,14 +47,67 @@ func NewWaceConfig() *WaceConfig {
 }
 
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig()}
+	return &waceWAFConfig{coraza.NewWAFConfig(), false, coraza.NewWAFConfig()}
 }
 
 func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFConfig {
 	if filePath == "exceptions.conf" {
-		conf.exceptionsConfig = conf.exceptionsConfig.WithDirectivesFromFile(filePath)
+		conf.wantExceptions = true
 	} else {
 		conf.WAFConfig = conf.WAFConfig.WithDirectivesFromFile(filePath)
 	}
 	return conf
+}
+
+func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceConfig) coraza.WAFConfig {
+	finalsRules := map[string]string{}
+		modelsToSet := ""
+		modelsToGet := ""
+		for _, model := range waceConfig.reqHeadModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model +":%{tx." + model + "},"
+		}
+		finalRule := "SecAction \"id:100, phase:1, nolog, msg:'" + modelsToGet + "' pass\""
+		finalsRules["phase1"] = finalRule
+
+		modelsToGet = ""
+		for _, model := range waceConfig.respBodyModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model +":%{tx." + model + "},"
+		}
+		for _, model := range waceConfig.reqModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model +":%{tx." + model + "},"
+		}
+		finalRule = "SecAction \"id:200, phase:2, nolog, msg:'" + modelsToGet + "' pass\""
+		finalsRules["phase2"] = finalRule
+
+		modelsToGet = ""
+		for _, model := range waceConfig.respHeadModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model +":%{tx." + model + "},"
+		}
+		finalRule = "SecAction \"id:300, phase:3, nolog, msg:'" + modelsToGet + "' pass\""
+		finalsRules["phase3"] = finalRule
+		
+		modelsToGet = ""
+		for _, model := range waceConfig.respBodyModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model +":%{tx." + model + "},"
+		}
+		for _, model := range waceConfig.respModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model +":%{tx." + model + "},"
+		}
+		finalRule = "SecAction \"id:400, phase:4, nolog, msg:'" + modelsToGet + "' pass\""
+		finalsRules["phase4"] = finalRule
+
+		initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""
+	return conf.exceptionsConfig.
+		WithDirectives(initialRule).
+		WithDirectivesFromFile("exceptions.conf").
+		WithDirectives(finalsRules["phase1"]).
+		WithDirectives(finalsRules["phase2"]).
+		WithDirectives(finalsRules["phase3"]).
+		WithDirectives(finalsRules["phase4"])
 }
