@@ -1,7 +1,11 @@
 package waceWAF
 
 import (
+	"io/fs"
+
 	"github.com/corazawaf/coraza/v3"
+	"github.com/corazawaf/coraza/v3/debuglog"
+	"github.com/corazawaf/coraza/v3/types"
 	cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
 )
 
@@ -58,6 +62,64 @@ func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFCon
 	}
 	return conf
 }
+
+func (conf *waceWAFConfig) WithDirectives(directives string) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithDirectives(directives)
+	return conf
+}
+
+func (conf *waceWAFConfig) WithRequestBodyAccess() coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithRequestBodyAccess()
+	conf.exceptionsConfig = conf.exceptionsConfig.WithRequestBodyAccess()
+	return conf
+}
+
+func (conf *waceWAFConfig) WithRequestBodyLimit(limit int) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithRequestBodyLimit(limit)
+	conf.exceptionsConfig = conf.exceptionsConfig.WithRequestBodyLimit(limit)
+	return conf
+}
+
+func (conf *waceWAFConfig) WithResponseBodyAccess() coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithResponseBodyAccess()
+	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyAccess()
+	return conf
+}
+
+func (conf *waceWAFConfig) WithRequestBodyInMemoryLimit(limit int) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithRequestBodyInMemoryLimit(limit)
+	conf.exceptionsConfig = conf.exceptionsConfig.WithRequestBodyInMemoryLimit(limit)
+	return conf
+}
+
+func (conf *waceWAFConfig) WithResponseBodyLimit(limit int) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithResponseBodyLimit(limit)
+	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyLimit(limit)
+	return conf
+}
+
+func (conf *waceWAFConfig) WithResponseBodyMimeTypes(mimeTypes []string) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithResponseBodyMimeTypes(mimeTypes)
+	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyMimeTypes(mimeTypes)
+	return conf
+} 
+
+func (conf *waceWAFConfig) WithDebugLogger(logger debuglog.Logger) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithDebugLogger(logger)
+	return conf
+}
+
+func (conf *waceWAFConfig) WithErrorCallback(logger func(rule types.MatchedRule)) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithErrorCallback(logger)
+	return conf
+}
+
+func (conf *waceWAFConfig) 	WithRootFS(fs fs.FS) coraza.WAFConfig {
+	conf.WAFConfig = conf.WAFConfig.WithRootFS(fs)
+	conf.exceptionsConfig = conf.exceptionsConfig.WithRootFS(fs)
+	return conf
+}
+
 
 func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceConfig) coraza.WAFConfig {
 	finalsRules := map[string]string{}
