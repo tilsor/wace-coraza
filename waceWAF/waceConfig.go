@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"io/fs"
+	"strings"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/debuglog"
@@ -11,7 +12,7 @@ import (
 
 type waceWAFConfig struct {
 	coraza.WAFConfig
-	wantExceptions bool
+	wantExceptions   bool
 	exceptionsConfig coraza.WAFConfig
 }
 
@@ -25,25 +26,25 @@ type WaceConfig struct {
 }
 
 func NewWaceConfig() *WaceConfig {
-	conf:= cf.Get()
+	conf := cf.Get()
 	reqHeadModelIDs := []string{}
 	reqBodyModelIDs := []string{}
 	reqModelIDs := []string{}
 	respHeadModelIDs := []string{}
 	respBodyModelIDs := []string{}
 	respModelIDs := []string{}
-	for _, model := range conf.ModelPlugins{
-		if model.PluginType.String() == "RequestHeaders"{
+	for _, model := range conf.ModelPlugins {
+		if model.PluginType.String() == "RequestHeaders" {
 			reqHeadModelIDs = append(reqHeadModelIDs, model.ID)
-		} else if model.PluginType.String() == "RequestBody"{
+		} else if model.PluginType.String() == "RequestBody" {
 			reqBodyModelIDs = append(reqBodyModelIDs, model.ID)
-		} else if model.PluginType.String() == "AllRequest"{
+		} else if model.PluginType.String() == "AllRequest" {
 			reqModelIDs = append(reqModelIDs, model.ID)
-		} else if model.PluginType.String() == "ResponseHeaders"{
+		} else if model.PluginType.String() == "ResponseHeaders" {
 			respHeadModelIDs = append(respHeadModelIDs, model.ID)
-		} else if model.PluginType.String() == "ResponseBody"{
+		} else if model.PluginType.String() == "ResponseBody" {
 			respBodyModelIDs = append(respBodyModelIDs, model.ID)
-		} else if model.PluginType.String() == "AllResponse"{
+		} else if model.PluginType.String() == "AllResponse" {
 			respModelIDs = append(respModelIDs, model.ID)
 		}
 	}
@@ -102,7 +103,7 @@ func (conf *waceWAFConfig) WithResponseBodyMimeTypes(mimeTypes []string) coraza.
 	conf.WAFConfig = conf.WAFConfig.WithResponseBodyMimeTypes(mimeTypes)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyMimeTypes(mimeTypes)
 	return conf
-} 
+}
 
 func (conf *waceWAFConfig) WithDebugLogger(logger debuglog.Logger) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithDebugLogger(logger)
@@ -114,62 +115,97 @@ func (conf *waceWAFConfig) WithErrorCallback(logger func(rule types.MatchedRule)
 	return conf
 }
 
-func (conf *waceWAFConfig) 	WithRootFS(fs fs.FS) coraza.WAFConfig {
+func (conf *waceWAFConfig) WithRootFS(fs fs.FS) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithRootFS(fs)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithRootFS(fs)
 	return conf
 }
 
-
 func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceConfig) coraza.WAFConfig {
-	finalsRules := map[string]string{}
-		modelsToSet := ""
-		modelsToGet := ""
+	finalsRules := []string{}
+	modelsToSet := ""
+	modelsToGet := ""
+	finalRule := ""
+
+	if len(waceConfig.reqHeadModelIDs) != 0 {
 		for _, model := range waceConfig.reqHeadModelIDs {
 			modelsToSet += "setvar:tx." + model + "=true,"
-			modelsToGet += model +":%{tx." + model + "},"
+			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule := "SecAction \"id:100, phase:1, nolog, msg:'" + modelsToGet + "' pass\""
-		finalsRules["phase1"] = finalRule
+		finalRule = "SecAction \"id:100, phase:1, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
-		for _, model := range waceConfig.respBodyModelIDs {
+	}
+
+	if len(waceConfig.reqBodyModelIDs) != 0 {
+		for _, model := range waceConfig.reqBodyModelIDs {
 			modelsToSet += "setvar:tx." + model + "=true,"
-			modelsToGet += model +":%{tx." + model + "},"
-		}
+			modelsToGet += model + ":%{tx." + model + "},"
+		}		
+		finalRule = "SecAction \"id:200, phase:2, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
+
+		modelsToGet = ""
+	}
+	if len(waceConfig.reqModelIDs) != 0	{
 		for _, model := range waceConfig.reqModelIDs {
 			modelsToSet += "setvar:tx." + model + "=true,"
-			modelsToGet += model +":%{tx." + model + "},"
+			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:200, phase:2, nolog, msg:'" + modelsToGet + "' pass\""
-		finalsRules["phase2"] = finalRule
+		finalRule = "SecAction \"id:300, phase:2, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
+	}
+
+	if len(waceConfig.respHeadModelIDs) != 0 {
 		for _, model := range waceConfig.respHeadModelIDs {
 			modelsToSet += "setvar:tx." + model + "=true,"
-			modelsToGet += model +":%{tx." + model + "},"
+			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:300, phase:3, nolog, msg:'" + modelsToGet + "' pass\""
-		finalsRules["phase3"] = finalRule
-		
+		finalRule = "SecAction \"id:400, phase:3, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
+
 		modelsToGet = ""
+	}
+
+	if len(waceConfig.respBodyModelIDs) != 0 {
 		for _, model := range waceConfig.respBodyModelIDs {
 			modelsToSet += "setvar:tx." + model + "=true,"
-			modelsToGet += model +":%{tx." + model + "},"
+			modelsToGet += model + ":%{tx." + model + "},"
 		}
+		finalRule = "SecAction \"id:500, phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
+
+		modelsToGet = ""
+	}
+	if len(waceConfig.respModelIDs) != 0  {
 		for _, model := range waceConfig.respModelIDs {
 			modelsToSet += "setvar:tx." + model + "=true,"
-			modelsToGet += model +":%{tx." + model + "},"
+			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:400, phase:4, nolog, msg:'" + modelsToGet + "' pass\""
-		finalsRules["phase4"] = finalRule
+		finalRule = "SecAction \"id:600, phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
+	}
 
-		initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""
-	return conf.exceptionsConfig.
+	initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""
+	conf.exceptionsConfig = conf.exceptionsConfig.
 		WithDirectives(initialRule).
-		WithDirectivesFromFile("exceptions.conf").
-		WithDirectives(finalsRules["phase1"]).
-		WithDirectives(finalsRules["phase2"]).
-		WithDirectives(finalsRules["phase3"]).
-		WithDirectives(finalsRules["phase4"])
+		WithDirectivesFromFile("exceptions.conf")
+	for _, rule := range finalsRules {
+		conf.exceptionsConfig = conf.exceptionsConfig.WithDirectives(rule)
+	}
+	return conf.exceptionsConfig
+}
+
+func ParseExceptedModels(exceptionRuleMessage string) []string {
+	models := strings.Split(exceptionRuleMessage, ",")
+	unexceptedModels := []string{}
+	for _, model := range models {
+		if strings.Contains(model, "true") {
+			unexceptedModels = append(unexceptedModels, strings.Split(model, ":")[0])
+		}
+	}
+	return unexceptedModels
 }

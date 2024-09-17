@@ -87,7 +87,13 @@ func (t WaceTransaction) AddRequestHeader(key string, value string) {
 func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	go func() {
 		fmt.Println("[DEBUG][WACE] Processing request headers by WACE and Coraza")
-		wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, t.waf.waceConfig.reqHeadModelIDs)
+		t.exceptionTransaction.ProcessRequestHeaders()
+		exceptionRule := t.exceptionTransaction.MatchedRules()[len(t.exceptionTransaction.MatchedRules())-1]
+		unexceptedModels := ParseExceptedModels(exceptionRule.Message())
+		for _, model := range unexceptedModels {
+			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
+		}
+		wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, unexceptedModels)
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
@@ -118,12 +124,33 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 // Implements the ProcessRequestBody interface provided by Coraza WAF to process request body by WACE and Coraza
 func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	go func() {
-		fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
-		wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, t.waf.waceConfig.reqBodyModelIDs)
-	}()
-	go func() {
-		fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
-		wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+ *t.requestHeaders+"\n"+ *t.requestBody, t.waf.waceConfig.reqBodyModelIDs)
+		t.exceptionTransaction.ProcessRequestBody()
+		requestBodyExceptionRuleMessage := ""
+		requestExceptionRuleMessage := ""
+		for _, rule := range t.exceptionTransaction.MatchedRules() {
+			if rule.Rule().ID() == 200 {
+				requestBodyExceptionRuleMessage = rule.Message()
+			} else if rule.Rule().ID() == 300 {
+				requestExceptionRuleMessage = rule.Message()
+			}
+		}
+		unexceptedRequestBodyModels := ParseExceptedModels(requestBodyExceptionRuleMessage)
+		unexceptedRequestModels := ParseExceptedModels(requestExceptionRuleMessage)
+		for _, model := range unexceptedRequestBodyModels {
+			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
+		}
+		for _, model := range unexceptedRequestModels {
+			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
+		}
+
+		go func() {
+			fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
+			wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, unexceptedRequestBodyModels)
+		}()
+		go func() {
+			fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
+			wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+ *t.requestHeaders+"\n"+ *t.requestBody, unexceptedRequestModels)
+		}()
 	}()
 	interruption, err := t.Transaction.ProcessRequestBody()
 
@@ -157,6 +184,18 @@ func (t WaceTransaction) AddResponseHeader(key string, value string) {
 // TODO: Check for a better function to parse status code
 func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.Interruption {
 	*t.responseLine = proto + " " + fmt.Sprint(code)
+	go func() {
+		fmt.Println("[DEBUG][WACE] Processing response headers by WACE and Coraza")
+		t.exceptionTransaction.ProcessResponseHeaders(code, proto)
+		exceptionRule := t.exceptionTransaction.MatchedRules()[len(t.exceptionTransaction.MatchedRules())-1]
+		unexceptedModels := ParseExceptedModels(exceptionRule.Message())
+		for _, model := range unexceptedModels {
+			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
+		}
+
+		wace.AnalyzeRespLineAndHeaders(t.Transaction.ID(), *t.responseLine, *t.responseHeaders, unexceptedModels)
+	}()
+
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
 	return interruption
 }
@@ -178,6 +217,36 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 
 // Implements the ProcessResponseBody interface provided by Coraza WAF to process response body by WACE and Coraza
 func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
+	go func() {
+		t.exceptionTransaction.ProcessResponseBody()
+		responseBodyExceptionRuleMessage := ""
+		responseExceptionRuleMessage := ""
+		for _, rule := range t.exceptionTransaction.MatchedRules() {
+			if rule.Rule().ID() == 500 {
+				responseBodyExceptionRuleMessage = rule.Message()
+			} else if rule.Rule().ID() == 600 {
+				responseExceptionRuleMessage = rule.Message()
+			}
+		}
+		unexceptedResponseBodyModels := ParseExceptedModels(responseBodyExceptionRuleMessage)
+		unexceptedResponseModels := ParseExceptedModels(responseExceptionRuleMessage)
+		for _, model := range unexceptedResponseBodyModels {
+			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
+		}
+		for _, model := range unexceptedResponseModels {
+			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
+		}
+
+		go func() {
+			fmt.Println("[DEBUG][WACE] Processing response body by WACE and Coraza")
+			wace.AnalyzeResponseBody(t.Transaction.ID(), *t.responseBody, unexceptedResponseBodyModels)
+		}()
+		go func() {
+			fmt.Println("[DEBUG][WACE] Processing response by WACE and Coraza")
+			wace.AnalyzeResponse(t.Transaction.ID(), *t.responseLine+"\n"+ *t.responseHeaders+"\n"+ *t.responseBody, unexceptedResponseModels)
+		}()
+	}()
+
 	interruption, err := t.Transaction.ProcessResponseBody()
 	return interruption, err
 }
