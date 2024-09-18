@@ -216,8 +216,14 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	go func() {
 		fmt.Println("[DEBUG][WACE] Processing response headers by WACE and Coraza")
 		t.exceptionTransaction.ProcessResponseHeaders(code, proto)
-		exceptionRule := t.exceptionTransaction.MatchedRules()[len(t.exceptionTransaction.MatchedRules())-1]
-		unexceptedModels := ParseExceptedModels(exceptionRule.Message())
+
+		responseHeadersExceptionRuleMessage := ""
+		for _, rule := range t.exceptionTransaction.MatchedRules() {
+			if rule.Rule().ID() == 400 {
+				responseHeadersExceptionRuleMessage = rule.Message()
+			}
+		}
+		unexceptedModels := ParseExceptedModels(responseHeadersExceptionRuleMessage)
 		for _, model := range unexceptedModels {
 			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
 		}
