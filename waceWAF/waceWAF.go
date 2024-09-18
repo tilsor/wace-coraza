@@ -3,17 +3,20 @@ package waceWAF
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
 
 	wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
+	cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
 )
 
 type WaceWAF struct {
 	coraza.WAF
-	exceptionWAF coraza.WAF
-	waceConfig *WaceConfig
+	exceptionWAF 	coraza.WAF
+	waceConfig      *WaceConfig
+	earlyBlocking  bool
 }
 
 type WaceTransaction struct {
@@ -30,7 +33,7 @@ type WaceTransaction struct {
 
 // TODO: Parametrize the path to the waceconfig.yaml file
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
-	wace.Init("../Pruebas/ModSecIntl_wace_core/waceconfig.yaml")
+	wace.Init("../ModSecIntl_wace_core/waceconfig.yaml")
 	waceConfig := NewWaceConfig()
 
 	wafConfigs, ok := config.(*waceWAFConfig)
@@ -39,11 +42,14 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		return nil, fmt.Errorf("Error casting to waceWAFConfig")
 	}
 
-	waf, err := coraza.NewWAF(wafConfigs.WAFConfig.
-		WithDirectives("SecRuleUpdateActionById 949110 pass").
-		WithDirectives("SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:949112, phase:2, deny, t:none, msg:'%{TX.BLOCKING_INBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\"").
-		WithDirectives("SecRuleUpdateActionById 959100 pass").
-		WithDirectives("SecRule TX:BLOCKING_OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_threshold}\" \"id:959102, phase:4, deny, t:none, msg:'%{TX.BLOCKING_OUTBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation', tag:'OWASP_CRS', ver:'OWASP_CRS/4.4.0-dev'\""))
+	// Get rules by CRS Version
+	configRules := getConfigRules(cf.Get().Options["crs_version"])
+
+	for _, rule := range configRules {
+		wafConfigs.WAFConfig = wafConfigs.WAFConfig.WithDirectives(rule)
+	}
+
+	waf, err := coraza.NewWAF(wafConfigs.WAFConfig)
 
 	if wafConfigs.wantExceptions {
 		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives("exceptions.conf", waceConfig)
@@ -51,7 +57,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
 
-	return &WaceWAF{waf, exceptionsWaf, waceConfig}, err
+	return &WaceWAF{waf, exceptionsWaf, waceConfig, cf.Get().Options["early_blocking"] == "true"}, err
 }
 
 // Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction
@@ -97,6 +103,20 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
+
+	if t.waf.earlyBlocking {
+		mtRules := t.MatchedRules()
+		mtRulesLen := len(mtRules)
+
+		wafParams := map[string]string{}
+		for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
+			scoreParts := strings.Split(score, "=")
+			wafParams[scoreParts[0]] = scoreParts[1]
+		}
+		wafParams["phase"] = "1"
+
+		wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+	}
 
 	return interruption
 }
@@ -152,14 +172,23 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+ *t.requestHeaders+"\n"+ *t.requestBody, unexceptedRequestModels)
 		}()
 	}()
+
 	interruption, err := t.Transaction.ProcessRequestBody()
+
+	if err != nil {
+		fmt.Println("[DEBUG][WACE] Error processing request body by Coraza: " + err.Error())
+	}
 
 	mtRules := t.MatchedRules()
 
 	mtRulesLen := len(mtRules)
 
-	// TODO: Get and parse threshold with a new rule
-	wafParams := map[string]string{"anomalyscore": mtRules[mtRulesLen-1].Message(), "inboundthreshold": "8"}
+	wafParams := map[string]string{}
+	for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
+		scoreParts := strings.Split(score, "=")
+		wafParams[scoreParts[0]] = scoreParts[1]
+	}
+	wafParams["phase"] = "2"
 
 	// TODO: Get decision plugin id from the configstore
 	result, err := wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
@@ -197,6 +226,21 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	}()
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
+
+	if t.waf.earlyBlocking {
+		mtRules := t.MatchedRules()
+		mtRulesLen := len(mtRules)
+
+		wafParams := map[string]string{}
+		for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
+			scoreParts := strings.Split(score, "=")
+			wafParams[scoreParts[0]] = scoreParts[1]
+		}
+		wafParams["phase"] = "3"
+
+		wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+	}
+
 	return interruption
 }
 
@@ -248,6 +292,19 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	}()
 
 	interruption, err := t.Transaction.ProcessResponseBody()
+
+	mtRules := t.MatchedRules()
+	mtRulesLen := len(mtRules)
+
+	wafParams := map[string]string{}
+	for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
+		scoreParts := strings.Split(score, "=")
+		wafParams[scoreParts[0]] = scoreParts[1]
+	}
+	wafParams["phase"] = "4"
+
+	wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+	
 	return interruption, err
 }
 
