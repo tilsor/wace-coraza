@@ -94,8 +94,15 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	go func() {
 		fmt.Println("[DEBUG][WACE] Processing request headers by WACE and Coraza")
 		t.exceptionTransaction.ProcessRequestHeaders()
-		exceptionRule := t.exceptionTransaction.MatchedRules()[len(t.exceptionTransaction.MatchedRules())-1]
-		unexceptedModels := ParseExceptedModels(exceptionRule.Message())
+
+		requestHeadersExceptionRuleMessage := ""
+		for _, rule := range t.exceptionTransaction.MatchedRules() {
+			if rule.Rule().ID() == 100 {
+				requestHeadersExceptionRuleMessage = rule.Message()
+			}
+		}
+		unexceptedModels := ParseExceptedModels(requestHeadersExceptionRuleMessage)
+
 		for _, model := range unexceptedModels {
 			fmt.Println("[DEBUG][WACE] Unexcepted model: ", model)
 		}
