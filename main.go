@@ -42,10 +42,11 @@ func main() {
 }
 
 func createWAF() coraza.WAF {
-	cfg := coraza.NewWAFConfig().
+	cfg := waceWAF.NewWAFConfig().
 		WithDirectivesFromFile("coraza.conf").
 		WithDirectivesFromFile("coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("coreruleset/rules/*.conf")
+		WithDirectivesFromFile("coreruleset/rules/*.conf").
+		WithDirectivesFromFile("exceptions.conf")
 	waf, err := waceWAF.NewWAF(cfg)
 	if err != nil {
 		log.Fatal(err)
