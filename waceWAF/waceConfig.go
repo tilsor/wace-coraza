@@ -260,7 +260,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 	return conf.exceptionsConfig
 }
 
-func ParseExceptedModels(exceptionRuleMessage string) []string {
+func ParseActiveModels(exceptionRuleMessage string) []string {
 	models := strings.Split(exceptionRuleMessage, ",")
 	unexceptedModels := []string{}
 	for _, model := range models {

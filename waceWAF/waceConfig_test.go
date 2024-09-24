@@ -103,7 +103,7 @@ func TestNewWaceConfig(t *testing.T) {
 
 func TestParseUnexceptedModels(t *testing.T){
 	exceptionRuleMessage := "model1:true,model2:false,model3:true,"
-	models := ParseExceptedModels(exceptionRuleMessage)
+	models := ParseActiveModels(exceptionRuleMessage)
 	if len(models) != 2 {
 		t.Errorf("Error parsing unexcepted models: Expected 2, Got %d", len(models))
 	}
