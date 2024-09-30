@@ -54,7 +54,6 @@ func NewWaceConfig() *WaceConfig {
 // CRSVersion can be 2, 3 or 4
 func getConfigRules(CRSVersion string) []string {
 	// Rule format for scores
-	// TODO: Review the posibility of adding custom format for the scores
 		// inbound_blocking_anomaly_score, inbound_detection_anomaly_score, inbound_per_pl_anomaly_score, inbound_anomaly_score_threshold,
 		// outbound_blocking_anomaly_score, outbound_detection_anomaly_score, outbound_per_pl_anomaly_score, outbound_anomaly_score_threshold,
 		// sql_injection_score, xss_score, rfi_score, lfi_score, rce_score, php_injection_score, http_violation_score, session_fixation_score, combined_score
