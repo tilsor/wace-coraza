@@ -2,7 +2,10 @@ package waceWAF
 
 import (
 	"io/fs"
+	"io/ioutil"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/debuglog"
@@ -14,6 +17,7 @@ type waceWAFConfig struct {
 	coraza.WAFConfig
 	wantExceptions   bool
 	exceptionsConfig coraza.WAFConfig
+	options 		 map[string]string
 }
 
 type WaceConfig struct {
@@ -23,6 +27,39 @@ type WaceConfig struct {
 	respHeadModelIDs []string
 	respBodyModelIDs []string
 	respModelIDs     []string
+}
+
+type WaceConfigFileData struct {
+	cf.ConfigFileData `yaml:",inline"`
+	Options  map[string]string
+}
+
+func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
+	var inConf WaceConfigFileData
+
+	err := yaml.Unmarshal(config, &inConf)
+	if err != nil {
+		return err
+	}
+
+	w.options = make(map[string]string)
+	for key, value := range inConf.Options {
+		w.options[key] = value
+	}
+
+	err = cf.Get().SetConfig(inConf.ConfigFileData)
+
+	return err
+}
+
+// LoadConfig loads the configuration from the config file to memory
+func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
+	var file, err = ioutil.ReadFile(configFilePath)
+	if err != nil {
+		return err
+	}
+
+	return w.LoadConfigYaml(file)
 }
 
 func NewWaceConfig() *WaceConfig {
@@ -52,9 +89,8 @@ func NewWaceConfig() *WaceConfig {
 }
 
 // CRSVersion can be 2, 3 or 4
-func getConfigRules(CRSVersion string) []string {
+func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 	// Rule format for scores
-	// TODO: Review the posibility of adding custom format for the scores
 		// inbound_blocking_anomaly_score, inbound_detection_anomaly_score, inbound_per_pl_anomaly_score, inbound_anomaly_score_threshold,
 		// outbound_blocking_anomaly_score, outbound_detection_anomaly_score, outbound_per_pl_anomaly_score, outbound_anomaly_score_threshold,
 		// sql_injection_score, xss_score, rfi_score, lfi_score, rce_score, php_injection_score, http_violation_score, session_fixation_score, combined_score
@@ -97,7 +133,7 @@ func getConfigRules(CRSVersion string) []string {
 		res = append(res, "SecRuleUpdateActionById 959100 pass")
 		res = append(res, "SecRule TX:BLOCKING_OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_threshold}\" \"id:959102, phase:4, deny, t:none, msg:'%{TX.BLOCKING_OUTBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation'\"")
 		
-		if cf.Get().Options["early_blocking"] == "true" { 
+		if w.options["early_blocking"] == "true" { 
 			res = append(res, "SecAction phase:1,setvar:'tx.early_blocking=1'")
 		}
 
@@ -113,7 +149,7 @@ func getConfigRules(CRSVersion string) []string {
 }
 
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), false, coraza.NewWAFConfig()}
+	return &waceWAFConfig{coraza.NewWAFConfig(), false, coraza.NewWAFConfig(), make(map[string]string)}
 }
 
 func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFConfig {

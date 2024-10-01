@@ -9,7 +9,6 @@ import (
 	"github.com/corazawaf/coraza/v3/types"
 
 	wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
-	cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
 )
 
 type WaceWAF struct {
@@ -33,17 +32,20 @@ type WaceTransaction struct {
 
 // TODO: Parametrize the path to the waceconfig.yaml file
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
-	wace.Init("/mnt/c/Users/agust/Desktop/ProyGrado/Pruebas/ModSecIntl_wace_core/waceconfig.yaml")
 	waceConfig := NewWaceConfig()
 
 	wafConfigs, ok := config.(*waceWAFConfig)
+
+	wafConfigs.LoadConfig("/mnt/c/Users/agust/Desktop/ProyGrado/Pruebas/ModSecIntl_wace_core/waceconfig.yaml")
+
+	wace.Init()
 
 	if !ok {
 		return nil, fmt.Errorf("Error casting to waceWAFConfig")
 	}
 
 	// Get rules by CRS Version
-	configRules := getConfigRules(cf.Get().Options["crs_version"])
+	configRules := wafConfigs.getConfigRules(wafConfigs.options["crs_version"])
 
 	for _, rule := range configRules {
 		wafConfigs.WAFConfig = wafConfigs.WAFConfig.WithDirectives(rule)
@@ -57,7 +59,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
 
-	return &WaceWAF{waf, exceptionsWaf, waceConfig, cf.Get().Options["early_blocking"] == "true"}, err
+	return &WaceWAF{waf, exceptionsWaf, waceConfig, wafConfigs.options["early_blocking"] == "true"}, err
 }
 
 // Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction
