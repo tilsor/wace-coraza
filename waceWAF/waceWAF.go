@@ -32,7 +32,6 @@ type WaceTransaction struct {
 
 // TODO: Parametrize the path to the waceconfig.yaml file
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
-	waceConfig := NewWaceConfig()
 
 	wafConfigs, ok := config.(*waceWAFConfig)
 
@@ -52,6 +51,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	}
 
 	waf, err := coraza.NewWAF(wafConfigs.WAFConfig)
+
+	waceConfig := NewWaceConfig()
 
 	if wafConfigs.wantExceptions {
 		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives("exceptions.conf", waceConfig)
