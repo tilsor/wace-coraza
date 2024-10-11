@@ -89,7 +89,7 @@ func TestNewWaceConfig(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err)
 	}
-	conf := waf.waceConfig
+	conf := waf.waceModels
 	if conf == nil {
 		t.Errorf("Error creating WaceConfig")
 	}

@@ -16,13 +16,16 @@ import (
 
 type waceWAFConfig struct {
 	coraza.WAFConfig
-	wantExceptions   bool
 	exceptionsConfig coraza.WAFConfig
-	options 		 map[string]string
+	waceConfigFilePath string
+	exceptionsFilePath   string
+	waceModels    *WaceModels
+	earlyBlocking 		 bool
+	crsVersion    string
 	ruleIdsForExceptions map[string]int
 }
 
-type WaceConfig struct {
+type WaceModels struct {
 	reqHeadModelIDs  []string
 	reqBodyModelIDs  []string
 	reqModelIDs      []string
@@ -44,11 +47,12 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	if err != nil {
 		return err
 	}
-	if w.options == nil  {
-		w.options = make(map[string]string)
-	}
 	for key, value := range inConf.Options {
-		w.options[key] = value
+		if key == "early_blocking" {
+			w.earlyBlocking = value == "true"
+		} else if key == "crs_version" {
+			w.crsVersion = value
+		}
 	}
 	if w.ruleIdsForExceptions == nil  {
 		w.ruleIdsForExceptions = make(map[string]int)
@@ -70,7 +74,7 @@ func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
 	return w.LoadConfigYaml(file)
 }
 
-func NewWaceConfig() *WaceConfig {
+func NewWaceModelsConfig() *WaceModels {
 	conf := cf.Get()
 	reqHeadModelIDs := []string{}
 	reqBodyModelIDs := []string{}
@@ -93,7 +97,7 @@ func NewWaceConfig() *WaceConfig {
 			respModelIDs = append(respModelIDs, model.ID)
 		}
 	}
-	return &WaceConfig{reqHeadModelIDs, reqBodyModelIDs, reqModelIDs, respHeadModelIDs, respBodyModelIDs, respModelIDs}
+	return &WaceModels{reqHeadModelIDs, reqBodyModelIDs, reqModelIDs, respHeadModelIDs, respBodyModelIDs, respModelIDs}
 }
 
 // CRSVersion can be 2, 3 or 4
@@ -141,7 +145,7 @@ func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 		res = append(res, "SecRuleUpdateActionById 959100 pass")
 		res = append(res, "SecRule TX:BLOCKING_OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_threshold}\" \"id:959102, phase:4, deny, t:none, msg:'%{TX.BLOCKING_OUTBOUND_ANOMALY_SCORE}', tag:'anomaly-evaluation'\"")
 		
-		if w.options["early_blocking"] == "true" { 
+		if w.earlyBlocking { 
 			res = append(res, "SecAction phase:1,setvar:'tx.early_blocking=1'")
 		}
 
@@ -156,14 +160,17 @@ func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 	}
 }
 
+// TODO: Check for a default value for CRS
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), false, coraza.NewWAFConfig(), make(map[string]string), make(map[string]int)}
+	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, false, "4.0.0", make(map[string]int)}
 }
 
 func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFConfig {
-	if filePath == "exceptions.conf" {
-		conf.wantExceptions = true
-	} else {
+	if strings.Contains(filePath, "waceexceptions.conf") { 
+		conf.exceptionsFilePath = filePath
+	} else if strings.Contains(filePath, "waceconfig.yaml") { 
+		conf.waceConfigFilePath = filePath
+	} else { 
 		conf.WAFConfig = conf.WAFConfig.WithDirectivesFromFile(filePath)
 	}
 	return conf
@@ -226,7 +233,7 @@ func (conf *waceWAFConfig) WithRootFS(fs fs.FS) coraza.WAFConfig {
 	return conf
 }
 
-func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceConfig) coraza.WAFConfig {
+func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceModels) coraza.WAFConfig {
 	finalsRules := []string{}
 	modelsToSet := ""
 	modelsToGet := ""
@@ -296,7 +303,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 	initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""
 	conf.exceptionsConfig = conf.exceptionsConfig.
 		WithDirectives(initialRule).
-		WithDirectivesFromFile("exceptions.conf")
+		WithDirectivesFromFile(filePath)
 	for _, rule := range finalsRules {
 		conf.exceptionsConfig = conf.exceptionsConfig.WithDirectives(rule)
 	}
