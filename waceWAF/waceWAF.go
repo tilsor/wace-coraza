@@ -120,7 +120,13 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.reqHeadModelIDs
 		}
-		wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, activeModels)
+		
+		// wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, activeModels)
+		
+		err := wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.requestLine + "\n" + *t.requestHeaders, activeModels)
+		if err != nil {
+			fmt.Printf("[ERROR][WACE] Error processing request headers by WACE: %v\n", err)
+		}
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
@@ -204,11 +210,23 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		}
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
-			wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			
+			// wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			
+			err := wace.Analyze("RequestBody", t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing request body by WACE: %v\n", err)
+			}
 		}()
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
-			wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
+			
+			//wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
+			
+			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestBodyModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing request by WACE: %v\n", err)
+			}
 		}()
 	}()
 
@@ -279,7 +297,13 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.respHeadModelIDs
 		}
-		wace.AnalyzeRespLineAndHeaders(t.Transaction.ID(), *t.responseLine, *t.responseHeaders, activeModels)
+		// wace.AnalyzeRespLineAndHeaders(t.Transaction.ID(), *t.responseLine, *t.responseHeaders, activeModels)
+
+		err := wace.Analyze("ResponseHeaders", t.Transaction.ID(), *t.responseLine + "\n" + *t.responseHeaders, activeModels)
+		if err != nil {
+			fmt.Printf("[ERROR][WACE] Error processing response headers by WACE: %v\n", err)
+		}
+		
 	}()
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
@@ -359,11 +383,23 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing response body by WACE and Coraza")
-			wace.AnalyzeResponseBody(t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+			
+			// wace.AnalyzeResponseBody(t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+
+			err := wace.Analyze("ResponseBody", t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing response body by WACE: %v\n", err)
+			}
 		}()
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing response by WACE and Coraza")
-			wace.AnalyzeResponse(t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders+"\n"+*t.responseBody, activeResponseModels)
+			
+			// wace.AnalyzeResponse(t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders+"\n"+*t.responseBody, activeResponseModels)
+
+			err := wace.Analyze("AllResponse", t.Transaction.ID(), *t.requestBody, activeResponseModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing response by WACE: %v\n", err)
+			}
 		}()
 	}()
 
