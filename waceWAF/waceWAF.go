@@ -4,11 +4,23 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
+	"context"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
 
 	wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+    "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
+    "go.opentelemetry.io/otel/sdk/resource"
+    "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+    sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 type WaceWAF struct {
@@ -29,6 +41,8 @@ type WaceTransaction struct {
 	responseBody         *string
 }
 
+var ctx = context.Background()
+
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	wafConfigs, ok := config.(*waceWAFConfig)
@@ -40,8 +54,6 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	wafConfigs.LoadConfig(wafConfigs.waceConfigFilePath)
 
 	wace.Init()
-
-
 
 	// Get rules by CRS Version
 	configRules := wafConfigs.getConfigRules(wafConfigs.crsVersion)
@@ -61,6 +73,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
 
+	InitMetrics(ctx)
+
 	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, err
 }
 
@@ -68,6 +82,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 // TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
+
+	transactionCounter.Add(ctx, 1)
 
 	return WaceTransaction{w.WAF.NewTransaction(), w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
 }
@@ -120,7 +136,13 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.reqHeadModelIDs
 		}
-		wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, activeModels)
+		
+		// wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, activeModels)
+		
+		err := wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.requestLine + "\n" + *t.requestHeaders, activeModels)
+		if err != nil {
+			fmt.Printf("[ERROR][WACE] Error processing request headers by WACE: %v\n", err)
+		}
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
@@ -204,11 +226,23 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		}
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
-			wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			
+			// wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			
+			err := wace.Analyze("RequestBody", t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing request body by WACE: %v\n", err)
+			}
 		}()
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
-			wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
+			
+			//wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
+			
+			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestBodyModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing request by WACE: %v\n", err)
+			}
 		}()
 	}()
 
@@ -279,7 +313,13 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.respHeadModelIDs
 		}
-		wace.AnalyzeRespLineAndHeaders(t.Transaction.ID(), *t.responseLine, *t.responseHeaders, activeModels)
+		// wace.AnalyzeRespLineAndHeaders(t.Transaction.ID(), *t.responseLine, *t.responseHeaders, activeModels)
+
+		err := wace.Analyze("ResponseHeaders", t.Transaction.ID(), *t.responseLine + "\n" + *t.responseHeaders, activeModels)
+		if err != nil {
+			fmt.Printf("[ERROR][WACE] Error processing response headers by WACE: %v\n", err)
+		}
+		
 	}()
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
@@ -359,11 +399,23 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing response body by WACE and Coraza")
-			wace.AnalyzeResponseBody(t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+			
+			// wace.AnalyzeResponseBody(t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+
+			err := wace.Analyze("ResponseBody", t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing response body by WACE: %v\n", err)
+			}
 		}()
 		go func() {
 			fmt.Println("[DEBUG][WACE] Processing response by WACE and Coraza")
-			wace.AnalyzeResponse(t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders+"\n"+*t.responseBody, activeResponseModels)
+			
+			// wace.AnalyzeResponse(t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders+"\n"+*t.responseBody, activeResponseModels)
+
+			err := wace.Analyze("AllResponse", t.Transaction.ID(), *t.requestBody, activeResponseModels)
+			if err != nil {
+				fmt.Printf("[ERROR][WACE] Error processing response by WACE: %v\n", err)
+			}
 		}()
 	}()
 
@@ -387,3 +439,70 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 func (t WaceTransaction) ProcessLogging() {
 	t.Transaction.ProcessLogging()
 }
+
+var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
+
+// https://github.com/open-telemetry/opentelemetry-go-contrib/blob/main/examples/otel-collector/main.go
+func initConn() (*grpc.ClientConn, error) {
+	// It connects the OpenTelemetry Collector through local gRPC connection.
+	// You may replace `localhost:4317` with your endpoint.
+	conn, err := grpc.NewClient("localhost:4317",
+		// Note the use of insecure transport here. TLS is recommended in production.
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
+	}
+
+	return conn, err
+}
+
+// Initializes an OTLP exporter, and configures the corresponding meter provider.
+func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn) (func(context.Context) error, error) {
+	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
+	}
+
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(2*time.Second))),
+		sdkmetric.WithResource(res),
+	)
+	otel.SetMeterProvider(meterProvider)
+
+	return meterProvider.Shutdown, nil
+}
+
+func InitMetrics(ctx context.Context) {
+	conn, err := initConn()
+	if err != nil {
+		panic(err)
+	}
+
+    res, err := resource.New(ctx,
+		resource.WithAttributes(
+			serviceName,
+		),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+    _ , err = initMeterProvider(ctx, res, conn)
+	if err != nil {
+		panic(err)
+	}
+	// defer func() {
+	// 	if err := shutdownMeterProvider(ctx); err != nil {
+	// 		panic(err) // TODO handle error
+	// 	}
+	// }()
+
+	meter := otel.Meter("metrics")
+	transactionCounter, err = meter.Int64Counter("transactions.counter")
+	if err != nil {
+		panic(err)
+	}
+}
+
+var transactionCounter metric.Int64Counter
