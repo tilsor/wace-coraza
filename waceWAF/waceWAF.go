@@ -4,11 +4,23 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
+	"context"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
 
 	wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+    "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
+    "go.opentelemetry.io/otel/sdk/resource"
+    "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+    sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 type WaceWAF struct {
@@ -29,6 +41,8 @@ type WaceTransaction struct {
 	responseBody         *string
 }
 
+var ctx = context.Background()
+
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	wafConfigs, ok := config.(*waceWAFConfig)
@@ -40,8 +54,6 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	wafConfigs.LoadConfig(wafConfigs.waceConfigFilePath)
 
 	wace.Init()
-
-
 
 	// Get rules by CRS Version
 	configRules := wafConfigs.getConfigRules(wafConfigs.crsVersion)
@@ -61,6 +73,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
 
+	InitMetrics(ctx)
+
 	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, err
 }
 
@@ -68,6 +82,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 // TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
+
+	transactionCounter.Add(ctx, 1)
 
 	return WaceTransaction{w.WAF.NewTransaction(), w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
 }
@@ -423,3 +439,70 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 func (t WaceTransaction) ProcessLogging() {
 	t.Transaction.ProcessLogging()
 }
+
+var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
+
+// https://github.com/open-telemetry/opentelemetry-go-contrib/blob/main/examples/otel-collector/main.go
+func initConn() (*grpc.ClientConn, error) {
+	// It connects the OpenTelemetry Collector through local gRPC connection.
+	// You may replace `localhost:4317` with your endpoint.
+	conn, err := grpc.NewClient("localhost:4317",
+		// Note the use of insecure transport here. TLS is recommended in production.
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
+	}
+
+	return conn, err
+}
+
+// Initializes an OTLP exporter, and configures the corresponding meter provider.
+func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn) (func(context.Context) error, error) {
+	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
+	}
+
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(2*time.Second))),
+		sdkmetric.WithResource(res),
+	)
+	otel.SetMeterProvider(meterProvider)
+
+	return meterProvider.Shutdown, nil
+}
+
+func InitMetrics(ctx context.Context) {
+	conn, err := initConn()
+	if err != nil {
+		panic(err)
+	}
+
+    res, err := resource.New(ctx,
+		resource.WithAttributes(
+			serviceName,
+		),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+    _ , err = initMeterProvider(ctx, res, conn)
+	if err != nil {
+		panic(err)
+	}
+	// defer func() {
+	// 	if err := shutdownMeterProvider(ctx); err != nil {
+	// 		panic(err) // TODO handle error
+	// 	}
+	// }()
+
+	meter := otel.Meter("metrics")
+	transactionCounter, err = meter.Int64Counter("transactions.counter")
+	if err != nil {
+		panic(err)
+	}
+}
+
+var transactionCounter metric.Int64Counter
