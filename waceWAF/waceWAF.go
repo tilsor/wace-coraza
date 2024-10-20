@@ -107,6 +107,7 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 		panic(err)
 	}
 	transactionCounter.Add(ctx, 1)
+	println("Total transactions: ", transactionCounter)
 	startTime.Store(CRSTransaction.ID(), start)
 
 	return WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
@@ -206,6 +207,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 					panic(err)
 				}
 				blocked.Add(ctx, 1)
+				println("Phase 1 blocked transactions: ", blocked)
 			}
 		}
 	}
@@ -333,6 +335,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				panic(err)
 			}
 			blocked.Add(ctx, 1)
+			println("Phase 2 blocked transactions: ", blocked)
 		}
 	}
 
@@ -416,6 +419,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 					panic(err)
 				}
 				blocked.Add(ctx, 1)
+				println("Phase 3 blocked transactions: ", blocked)
 			}
 		}
 	}
@@ -532,6 +536,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 				panic(err)
 			}
 			blocked.Add(ctx, 1)
+			println("Phase 4 blocked transactions: ", blocked)
 		}
 	}
 
@@ -542,14 +547,16 @@ func (t WaceTransaction) ProcessLogging() {
 	start := time.Now()
 	t.Transaction.ProcessLogging()
 	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
-	CRSExecTime, ok := CRSExecTime.Load(t.Transaction.ID())
+	CRSExecutionTime, ok := CRSExecTime.Load(t.Transaction.ID())
+	CRSExecTime.Delete(t.Transaction.ID())
 	if ok {
 		meter := otel.Meter("metrics")
 		execTime, err := meter.Int64Histogram("http.client.request.processed.execTime")
 		if err != nil {
 			panic(err)
 		}
-		execTime.Record(ctx, CRSExecTime.(int64))
+		execTime.Record(ctx, CRSExecutionTime.(int64))
+		println("CRS execution time: ", execTime)
 	}
 
 	meter := otel.Meter("metrics")
@@ -557,9 +564,11 @@ func (t WaceTransaction) ProcessLogging() {
 	if err != nil {
 		panic(err)
 	}
-	startTime, ok := startTime.Load(t.Transaction.ID())
+	startT, ok := startTime.Load(t.Transaction.ID())
+	startTime.Delete(t.Transaction.ID())
 	if ok {
-		duration.Record(ctx, (float64(time.Since(startTime.(time.Time).Round(time.Millisecond)).Milliseconds())))
+		duration.Record(ctx, (float64(time.Since(startT.(time.Time).Round(time.Millisecond)).Milliseconds())))
+		println("Duration: ", duration)
 	}
 
 	processed, err := meter.Int64Counter("http.client.request.processed.count")
@@ -567,6 +576,7 @@ func (t WaceTransaction) ProcessLogging() {
 		panic(err)
 	}
 	processed.Add(ctx, 1)
+	println("Processed transactions: ", processed)
 }
 
 var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
