@@ -56,8 +56,10 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	}
 
 	wafConfigs.LoadConfig(wafConfigs.waceConfigFilePath)
+	
+	InitMetrics(ctx)
 
-	wace.Init()
+	wace.Init(getWaceMeter())
 
 	// Get rules by CRS Version
 	configRules := wafConfigs.getConfigRules(wafConfigs.crsVersion)
@@ -76,8 +78,6 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	}
 
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
-
-	InitMetrics(ctx)
 
 	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, err
 }
@@ -100,14 +100,6 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 	CRSTransaction := w.WAF.NewTransaction()
 	addCRSExecTime(CRSTransaction.ID(), time.Since(start).Nanoseconds())
 
-	// Add start time to the context
-	meter = otel.Meter("metrics")
-	transactionCounter, err := meter.Int64Counter("http.client.request.started.count")
-	if err != nil {
-		panic(err)
-	}
-	transactionCounter.Add(ctx, 1)
-	println("Total transactions: ", transactionCounter)
 	startTime.Store(CRSTransaction.ID(), start)
 
 	return WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
@@ -201,13 +193,11 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 				fmt.Println("[DEBUG][WACE] Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
 
-				meter = otel.Meter("metrics")
-				blocked, err := meter.Int64Counter("http.client.request.blockedp1.count")
+				blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
 				if err != nil {
 					panic(err)
 				}
 				blocked.Add(ctx, 1)
-				println("Phase 1 blocked transactions: ", blocked)
 			}
 		}
 	}
@@ -329,13 +319,11 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			fmt.Println("[DEBUG][WACE] Transaction blocked")
 			interruption = &types.Interruption{Action: "deny"}
 
-			meter = otel.Meter("metrics")
-			blocked, err := meter.Int64Counter("http.client.request.blockedp2.count")
+			blocked, err := meter.Int64Counter("http.client.request.blockedp2.total")
 			if err != nil {
 				panic(err)
 			}
 			blocked.Add(ctx, 1)
-			println("Phase 2 blocked transactions: ", blocked)
 		}
 	}
 
@@ -413,13 +401,11 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 				fmt.Println("[DEBUG][WACE] Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
 
-				meter = otel.Meter("metrics")
-				blocked, err := meter.Int64Counter("http.client.request.blockedp3.count")
+				blocked, err := meter.Int64Counter("http.client.request.blockedp3.total")
 				if err != nil {
 					panic(err)
 				}
 				blocked.Add(ctx, 1)
-				println("Phase 3 blocked transactions: ", blocked)
 			}
 		}
 	}
@@ -530,13 +516,11 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			fmt.Println("[DEBUG][WACE] Transaction blocked")
 			interruption = &types.Interruption{Action: "deny"}
 
-			meter = otel.Meter("metrics")
-			blocked, err := meter.Int64Counter("http.client.request.blockedp4.count")
+			blocked, err := meter.Int64Counter("http.client.request.blockedp4.total")
 			if err != nil {
 				panic(err)
 			}
 			blocked.Add(ctx, 1)
-			println("Phase 4 blocked transactions: ", blocked)
 		}
 	}
 
@@ -550,17 +534,15 @@ func (t WaceTransaction) ProcessLogging() {
 	CRSExecutionTime, ok := CRSExecTime.Load(t.Transaction.ID())
 	CRSExecTime.Delete(t.Transaction.ID())
 	if ok {
-		meter := otel.Meter("metrics")
-		execTime, err := meter.Int64Histogram("http.client.request.processed.execTime")
+		execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.seconds")
 		if err != nil {
 			panic(err)
 		}
 		execTime.Record(ctx, CRSExecutionTime.(int64))
-		println("CRS execution time: ", execTime)
+		println("CRS execution time: ", CRSExecutionTime.(int64))
 	}
 
-	meter := otel.Meter("metrics")
-	duration, err := meter.Float64Histogram("http.client.request.processed.duration")
+	duration, err := meter.Float64Histogram("http.client.request.processed.duration.seconds")
 	if err != nil {
 		panic(err)
 	}
@@ -568,15 +550,14 @@ func (t WaceTransaction) ProcessLogging() {
 	startTime.Delete(t.Transaction.ID())
 	if ok {
 		duration.Record(ctx, (float64(time.Since(startT.(time.Time).Round(time.Millisecond)).Milliseconds())))
-		println("Duration: ", duration)
+		println("Duration: ", (float64(time.Since(startT.(time.Time).Round(time.Millisecond)).Milliseconds())))
 	}
 
-	processed, err := meter.Int64Counter("http.client.request.processed.count")
+	processed, err := meter.Int64Counter("http.client.request.processed.total")
 	if err != nil {
 		panic(err)
 	}
 	processed.Add(ctx, 1)
-	println("Processed transactions: ", processed)
 }
 
 var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
@@ -607,9 +588,24 @@ func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.C
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(2*time.Second))),
 		sdkmetric.WithResource(res),
 	)
-	otel.SetMeterProvider(meterProvider)
+
+	// Check if MeterProvider is already setted
+	if otel.GetMeterProvider() != nil {
+		fmt.Printf("MeterProvider already setted")
+	} else {
+		fmt.Printf("MeterProvider not setted")
+	}
+
+	globalMeterProvider = meterProvider
+	meter = globalMeterProvider.Meter("waceWAF")
 
 	return meterProvider.Shutdown, nil
+}
+
+var globalMeterProvider *sdkmetric.MeterProvider
+
+func getWaceMeter() metric.Meter {
+	return globalMeterProvider.Meter("wace")
 }
 
 func InitMetrics(ctx context.Context) {
