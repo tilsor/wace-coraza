@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
@@ -40,12 +39,12 @@ type WaceTransaction struct {
 	responseLine         *string
 	responseHeaders      *string
 	responseBody         *string
+	CRSExecTime          int64
+	startTime             time.Time
 }
 
 var ctx = context.Background()
-var CRSExecTime sync.Map
 var meter metric.Meter
-var startTime sync.Map
 
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
@@ -60,6 +59,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	InitMetrics(ctx)
 
 	wace.Init(getWaceMeter())
+	// wace.Init()
 
 	// Get rules by CRS Version
 	configRules := wafConfigs.getConfigRules(wafConfigs.crsVersion)
@@ -82,15 +82,6 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, err
 }
 
-func addCRSExecTime(transactionID string, addExecTime int64) {
-	currentExecTime, ok := CRSExecTime.Load(transactionID)
-	if ok {
-		CRSExecTime.Store(transactionID, currentExecTime.(int64)+addExecTime)
-	} else {
-		CRSExecTime.Store(transactionID, addExecTime)
-	}
-}
-
 // Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction
 // TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
@@ -98,17 +89,16 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 
 	start := time.Now()
 	CRSTransaction := w.WAF.NewTransaction()
-	addCRSExecTime(CRSTransaction.ID(), time.Since(start).Nanoseconds())
 
-	startTime.Store(CRSTransaction.ID(), start)
+	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string), time.Since(start).Nanoseconds(), start}
 
-	return WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string)}
+	return t
 }
 
 func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion string) {
 	start := time.Now()
 	t.Transaction.ProcessURI(uri, method, httpVersion)
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.ProcessURI(uri, method, httpVersion)
 	*t.requestLine = method + " " + uri + " " + httpVersion
@@ -118,7 +108,7 @@ func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion strin
 func (t WaceTransaction) SetServerName(serverName string) {
 	start := time.Now()
 	t.Transaction.SetServerName(serverName)
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.SetServerName(serverName)
 	*t.requestHeaders += "Server: " + serverName + "\n"
@@ -128,7 +118,7 @@ func (t WaceTransaction) SetServerName(serverName string) {
 func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	start := time.Now()
 	t.Transaction.AddRequestHeader(key, value)
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.AddRequestHeader(key, value)
 	*t.requestHeaders += key + ": " + value + "\n"
@@ -173,7 +163,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if t.waf.waceWafConfig.earlyBlocking {
 		mtRules := t.MatchedRules()
@@ -223,7 +213,7 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 
 	start = time.Now()
 	interruption, cantB, err = t.Transaction.ReadRequestBodyFrom(r)
-	addCRSExecTime(t.Transaction.ID(), (time.Since(start).Nanoseconds() + readTime))
+	t.CRSExecTime += time.Since(start).Nanoseconds() + readTime
 
 	return interruption, cantB, err
 }
@@ -293,7 +283,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	}()
 
 	interruption, err := t.Transaction.ProcessRequestBody()
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if err != nil {
 		fmt.Println("[DEBUG][WACE] Error processing request body by Coraza: " + err.Error())
@@ -333,7 +323,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 func (t WaceTransaction) AddResponseHeader(key string, value string) {
 	start := time.Now()
 	t.Transaction.AddResponseHeader(key, value)
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.AddResponseHeader(key, value)
 	*t.responseHeaders += key + ": " + value + "\n"
@@ -381,7 +371,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	}()
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if t.waf.waceWafConfig.earlyBlocking {
 		mtRules := t.MatchedRules()
@@ -427,7 +417,7 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 	}
 
 	interruption, cantB, err = t.Transaction.WriteResponseBody(b)
-	addCRSExecTime(t.Transaction.ID(), (time.Since(start).Nanoseconds() + toStringTime))
+	t.CRSExecTime += time.Since(start).Nanoseconds() + toStringTime
 
 	return interruption, cantB, err
 }
@@ -497,7 +487,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	}()
 
 	interruption, err := t.Transaction.ProcessResponseBody()
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
+	t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	mtRules := t.MatchedRules()
 	mtRulesLen := len(mtRules)
@@ -530,28 +520,21 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 func (t WaceTransaction) ProcessLogging() {
 	start := time.Now()
 	t.Transaction.ProcessLogging()
-	addCRSExecTime(t.Transaction.ID(), time.Since(start).Nanoseconds())
-	CRSExecutionTime, ok := CRSExecTime.Load(t.Transaction.ID())
-	CRSExecTime.Delete(t.Transaction.ID())
-	if ok {
-		execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.seconds")
-		if err != nil {
-			panic(err)
-		}
-		execTime.Record(ctx, CRSExecutionTime.(int64))
-		println("CRS execution time: ", CRSExecutionTime.(int64))
+	t.CRSExecTime += time.Since(start).Nanoseconds()
+
+	execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.seconds")
+	if err != nil {
+		panic(err)
 	}
+	execTime.Record(ctx, t.CRSExecTime)
+	println("CRS execution time: ", t.CRSExecTime)
 
 	duration, err := meter.Float64Histogram("http.client.request.processed.duration.seconds")
 	if err != nil {
 		panic(err)
 	}
-	startT, ok := startTime.Load(t.Transaction.ID())
-	startTime.Delete(t.Transaction.ID())
-	if ok {
-		duration.Record(ctx, (float64(time.Since(startT.(time.Time).Round(time.Millisecond)).Milliseconds())))
-		println("Duration: ", (float64(time.Since(startT.(time.Time).Round(time.Millisecond)).Milliseconds())))
-	}
+	duration.Record(ctx, (float64(time.Since(t.startTime).Nanoseconds())))
+
 
 	processed, err := meter.Int64Counter("http.client.request.processed.total")
 	if err != nil {
