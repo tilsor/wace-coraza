@@ -43,10 +43,19 @@ type WaceTransaction struct {
 	startTime             time.Time
 }
 
+var gConfig *generalConfig
 var ctx = context.Background()
 var meter metric.Meter
 
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
+
+	if gConfig == nil {
+		gConfig = new(generalConfig)
+		err := gConfig.LoadConfig("waceconfig.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("Error loading general config: %v", err)
+		}
+	}
 
 	wafConfigs, ok := config.(*waceWAFConfig)
 
@@ -54,15 +63,24 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		return nil, fmt.Errorf("Error casting to waceWAFConfig")
 	}
 
-	wafConfigs.LoadConfig(wafConfigs.waceConfigFilePath)
-	
+	fmt.Printf("[DEBUG][WACE] WaceAppConfigFilePath: %v\n", wafConfigs.waceAppConfigFilePath)
+	if wafConfigs.waceAppConfigFilePath != "" {
+		err := wafConfigs.LoadConfig(wafConfigs.waceAppConfigFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("Error loading waceAppConfig: %v", err)
+		}
+	} else {
+		wafConfigs.LoadConfigFromGeneralConfig(*gConfig)
+	}
+
 	InitMetrics(ctx)
 
 	wace.Init(getWaceMeter())
 	// wace.Init()
 
 	// Get rules by CRS Version
-	configRules := wafConfigs.getConfigRules(wafConfigs.crsVersion)
+	fmt.Printf("[DEBUG][WACE] CRS Version: %v\n", gConfig.crsVersion)
+	configRules := wafConfigs.getConfigRules(gConfig.crsVersion)
 
 	for _, rule := range configRules {
 		wafConfigs.WAFConfig = wafConfigs.WAFConfig.WithDirectives(rule)
@@ -70,11 +88,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	waf, err := coraza.NewWAF(wafConfigs.WAFConfig)
 
-	waceModels := NewWaceModelsConfig()
-	wafConfigs.waceModels = waceModels
-
 	if wafConfigs.exceptionsFilePath != "" {
-		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives(wafConfigs.exceptionsFilePath, waceModels)
+		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives(wafConfigs.exceptionsFilePath, wafConfigs.waceModels)
 	}
 
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
@@ -139,10 +154,10 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			activeModels = []string{}
 			requestHeadersExceptionRuleMessage := ""
 			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != t.waf.waceWafConfig.ruleIdsForExceptions["RequestHeaders"] {
+			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestHeaders"] {
 				i--
 			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == t.waf.waceWafConfig.ruleIdsForExceptions["RequestHeaders"] {
+			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["RequestHeaders"] {
 				requestHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeModels = ParseActiveModels(requestHeadersExceptionRuleMessage)
 
@@ -235,10 +250,10 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			activeRequestModels = []string{}
 
 			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != t.waf.waceWafConfig.ruleIdsForExceptions["AllRequest"] {
+			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["AllRequest"] {
 				i--
 			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == t.waf.waceWafConfig.ruleIdsForExceptions["AllRequest"] {
+			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["AllRequest"] {
 				requestExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeRequestModels = ParseActiveModels(requestExceptionRuleMessage)
 				for _, model := range activeRequestModels {
@@ -246,10 +261,10 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				}
 			}
 
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != t.waf.waceWafConfig.ruleIdsForExceptions["RequestBody"] {
+			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestBody"] {
 				i--
 			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == t.waf.waceWafConfig.ruleIdsForExceptions["RequestBody"] {
+			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["RequestBody"] {
 				requestBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeRequestBodyModels = ParseActiveModels(requestBodyExceptionRuleMessage)
 				for _, model := range activeRequestBodyModels {
@@ -347,10 +362,10 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 			activeModels = []string{}
 
 			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != t.waf.waceWafConfig.ruleIdsForExceptions["ResponseHeaders"] {
+			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseHeaders"] {
 				i--
 			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == t.waf.waceWafConfig.ruleIdsForExceptions["ResponseHeaders"] {
+			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["ResponseHeaders"] {
 				responseHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeModels = ParseActiveModels(responseHeadersExceptionRuleMessage)
 
@@ -438,10 +453,10 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			activeResponseModels = []string{}
 
 			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != t.waf.waceWafConfig.ruleIdsForExceptions["AllResponse"] {
+			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["AllResponse"] {
 				i--
 			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == t.waf.waceWafConfig.ruleIdsForExceptions["AllResponse"] {
+			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["AllResponse"] {
 				responseExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeResponseModels = ParseActiveModels(responseExceptionRuleMessage)
 				for _, model := range activeResponseModels {
@@ -449,10 +464,10 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 				}
 			}
 
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != t.waf.waceWafConfig.ruleIdsForExceptions["ResponseBody"] {
+			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseBody"] {
 				i--
 			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == t.waf.waceWafConfig.ruleIdsForExceptions["ResponseBody"] {
+			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["ResponseBody"] {
 				responseBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeResponseBodyModels = ParseActiveModels(responseBodyExceptionRuleMessage)
 				for _, model := range activeResponseBodyModels {
