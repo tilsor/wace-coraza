@@ -39,7 +39,8 @@ type WaceTransaction struct {
 	responseLine         *string
 	responseHeaders      *string
 	responseBody         *string
-	CRSExecTime          int64
+	CRSExecTime          *int64
+	IntegrationTime 	 *int64
 	startTime             time.Time
 }
 
@@ -100,43 +101,52 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 // Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction
 // TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
+	start := time.Now()
 	fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
 
-	start := time.Now()
 	CRSTransaction := w.WAF.NewTransaction()
 
-	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string), time.Since(start).Nanoseconds(), start}
-
+	var integrationTime int64 = time.Since(start).Nanoseconds()
+	var crsTime int64 = time.Since(start).Nanoseconds()
+	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string), &crsTime, &integrationTime, start}
 	return t
 }
 
 func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion string) {
 	start := time.Now()
 	t.Transaction.ProcessURI(uri, method, httpVersion)
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.ProcessURI(uri, method, httpVersion)
 	*t.requestLine = method + " " + uri + " " + httpVersion
+
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
 }
 
 // TODO: Analyze if the interface SetServerName of the transaction should be implemented
 func (t WaceTransaction) SetServerName(serverName string) {
 	start := time.Now()
 	t.Transaction.SetServerName(serverName)
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.SetServerName(serverName)
 	*t.requestHeaders += "Server: " + serverName + "\n"
+	
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
 }
 
 // TODO: Check how the headers are appended to the variable
 func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	start := time.Now()
 	t.Transaction.AddRequestHeader(key, value)
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.AddRequestHeader(key, value)
 	*t.requestHeaders += key + ": " + value + "\n"
+	
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
 }
 
 // Implements the ProcessRequestHeaders interface provided by Coraza WAF to process request headers by WACE and Coraza
@@ -175,10 +185,12 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		if err != nil {
 			fmt.Printf("[ERROR][WACE] Error processing request headers by WACE: %v\n", err)
 		}
+		// duration, _ := meter.Float64Histogram("http.client.request.headers.exceptions.duration.seconds")
+		// duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if t.waf.waceWafConfig.earlyBlocking {
 		mtRules := t.MatchedRules()
@@ -207,18 +219,20 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		}
 	}
 
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
 	return interruption
 }
 
 // TODO: Analyze if these actions can be done in parallel
 func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, int, error) {
-	start := time.Now()
+	startTime := time.Now()
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return nil, 0, err
 	}
 	*t.requestBody = string(b)
-	readTime := time.Since(start).Nanoseconds()
+	readTime := time.Since(startTime).Nanoseconds()
 
 	interruption, cantB, err := t.exceptionTransaction.ReadRequestBodyFrom(r)
 
@@ -226,9 +240,14 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 		return interruption, 0, err
 	}
 
-	start = time.Now()
+	start := time.Now()
 	interruption, cantB, err = t.Transaction.ReadRequestBodyFrom(r)
-	t.CRSExecTime += time.Since(start).Nanoseconds() + readTime
+	*t.CRSExecTime += time.Since(start).Nanoseconds() + readTime
+
+	duration, err := meter.Float64Histogram("http.client.request.body.read.duration.seconds")
+	duration.Record(ctx, (float64(time.Since(startTime).Nanoseconds())))
+
+	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
 
 	return interruption, cantB, err
 }
@@ -295,10 +314,12 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				fmt.Printf("[ERROR][WACE] Error processing request by WACE: %v\n", err)
 			}
 		}()
+		duration, _ := meter.Float64Histogram("http.client.request.body.exceptions.duration.seconds")
+		duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
 	}()
 
 	interruption, err := t.Transaction.ProcessRequestBody()
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if err != nil {
 		fmt.Println("[DEBUG][WACE] Error processing request body by Coraza: " + err.Error())
@@ -315,7 +336,6 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	}
 	wafParams["phase"] = "2"
 
-	fmt.Printf("%v", wafParams)
 	// TODO: Get decision plugin id from the configstore
 	result, err := wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
 
@@ -332,17 +352,28 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		}
 	}
 
+
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
+	// tiempo = time.Now()
 	return interruption, err
 }
 
 func (t WaceTransaction) AddResponseHeader(key string, value string) {
+	// fmt.Printf("[DEBUG][WACE] Adding response header: %v: %d\n", key, time.Since(tiempo).Milliseconds())
 	start := time.Now()
 	t.Transaction.AddResponseHeader(key, value)
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.AddResponseHeader(key, value)
 	*t.responseHeaders += key + ": " + value + "\n"
+
+	
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
 }
+
+// var tiempo time.Time
 
 // Implements the ProcessResponseHeaders interface provided by Coraza WAF to process response headers by WACE and Coraza
 // TODO: Check for a better function to parse status code
@@ -386,7 +417,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	}()
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if t.waf.waceWafConfig.earlyBlocking {
 		mtRules := t.MatchedRules()
@@ -415,24 +446,33 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		}
 	}
 
+	
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
 	return interruption
 }
 
 // TODO: Analyze if these actions can be done in parallel
 func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, error) {
-	start := time.Now()
+	startTime := time.Now()
 	*t.responseBody = string(b)
-	toStringTime := time.Since(start).Nanoseconds()
+	toStringTime := time.Since(startTime).Nanoseconds()
 
 	interruption, cantB, err := t.exceptionTransaction.WriteResponseBody(b)
 
-	start = time.Now()
+	start := time.Now()
 	if err != nil {
 		return interruption, 0, err
 	}
 
 	interruption, cantB, err = t.Transaction.WriteResponseBody(b)
-	t.CRSExecTime += time.Since(start).Nanoseconds() + toStringTime
+	*t.CRSExecTime += time.Since(start).Nanoseconds() + toStringTime
+
+	duration, err := meter.Float64Histogram("http.client.response.body.read.duration.seconds")
+	duration.Record(ctx, (float64(time.Since(startTime).Nanoseconds())))
+
+	
+	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
 
 	return interruption, cantB, err
 }
@@ -502,7 +542,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	}()
 
 	interruption, err := t.Transaction.ProcessResponseBody()
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	mtRules := t.MatchedRules()
 	mtRulesLen := len(mtRules)
@@ -529,33 +569,44 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		}
 	}
 
+	
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
 	return interruption, err
 }
 
 func (t WaceTransaction) ProcessLogging() {
 	start := time.Now()
 	t.Transaction.ProcessLogging()
-	t.CRSExecTime += time.Since(start).Nanoseconds()
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.seconds")
-	if err != nil {
-		panic(err)
-	}
-	execTime.Record(ctx, t.CRSExecTime)
-	println("CRS execution time: ", t.CRSExecTime)
+	go wace.CloseTransaction(t.Transaction.ID())
 
-	duration, err := meter.Float64Histogram("http.client.request.processed.duration.seconds")
-	if err != nil {
-		panic(err)
-	}
-	duration.Record(ctx, (float64(time.Since(t.startTime).Nanoseconds())))
+	go func() {
+		execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.seconds")
+		if err != nil {
+			panic(err)
+		}
+		execTime.Record(ctx, *t.CRSExecTime)
+		// println("CRS execution time: ", *t.CRSExecTime)
+
+		duration, err := meter.Float64Histogram("http.client.request.processed.duration.seconds")
+		if err != nil {
+			panic(err)
+		}
+		duration.Record(ctx, (float64(time.Since(t.startTime).Nanoseconds())))
 
 
-	processed, err := meter.Int64Counter("http.client.request.processed.total")
-	if err != nil {
-		panic(err)
-	}
-	processed.Add(ctx, 1)
+		processed, err := meter.Int64Counter("http.client.request.processed.total")
+		if err != nil {
+			panic(err)
+		}
+		processed.Add(ctx, 1)
+
+		*t.IntegrationTime += time.Since(start).Nanoseconds()
+		durationInt, _ := meter.Float64Histogram("http.client.integration.processed.duration.seconds")
+		durationInt.Record(ctx, (float64(*t.IntegrationTime)))
+	}()
 }
 
 var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
