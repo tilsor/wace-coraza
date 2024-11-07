@@ -117,8 +117,9 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	}
 
 	w.waceModels = NewWaceModelsConfig(inConf.ModelIds)
+	w.waceDecisionId = inConf.DecisionId
 	fmt.Printf("Model IDs: %v\n", w.waceModels.reqHeadModelIDs)
-	fmt.Printf("Decision ID: %s\n", inConf.DecisionId)
+	fmt.Printf("Decision ID: %s\n", w.waceDecisionId)
 	return err
 }
 

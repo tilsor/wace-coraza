@@ -56,6 +56,8 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Error loading general config: %v", err)
 		}
+		InitMetrics(ctx, gConfig.otelURL)
+		wace.Init(getWaceMeter())
 	}
 
 	wafConfigs, ok := config.(*waceWAFConfig)
@@ -64,7 +66,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		return nil, fmt.Errorf("Error casting to waceWAFConfig")
 	}
 
-	fmt.Printf("[DEBUG][WACE] WaceAppConfigFilePath: %v\n", wafConfigs.waceAppConfigFilePath)
+	//fmt.Printf("[DEBUG][WACE] WaceAppConfigFilePath: %v\n", wafConfigs.waceAppConfigFilePath)
 	if wafConfigs.waceAppConfigFilePath != "" {
 		err := wafConfigs.LoadConfig(wafConfigs.waceAppConfigFilePath)
 		if err != nil {
@@ -74,13 +76,10 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		wafConfigs.LoadConfigFromGeneralConfig(*gConfig)
 	}
 
-	InitMetrics(ctx)
-
-	wace.Init(getWaceMeter())
 	// wace.Init()
 
 	// Get rules by CRS Version
-	fmt.Printf("[DEBUG][WACE] CRS Version: %v\n", gConfig.crsVersion)
+	//fmt.Printf("[DEBUG][WACE] CRS Version: %v\n", gConfig.crsVersion)
 	configRules := wafConfigs.getConfigRules(gConfig.crsVersion)
 
 	for _, rule := range configRules {
@@ -102,7 +101,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 // TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	start := time.Now()
-	fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
+	////fmt.Println("[DEBUG][WACE] New wace-Coraza transaction")
 
 	CRSTransaction := w.WAF.NewTransaction()
 
@@ -154,7 +153,7 @@ func (t WaceTransaction) AddRequestHeader(key string, value string) {
 func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	start := time.Now()
 	go func() {
-		fmt.Println("[DEBUG][WACE] Processing request headers by WACE and Coraza")
+		////fmt.Println("[DEBUG][WACE] Processing request headers by WACE and Coraza")
 
 		var activeModels []string
 
@@ -171,9 +170,9 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 				requestHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeModels = ParseActiveModels(requestHeadersExceptionRuleMessage)
 
-				for _, model := range activeModels {
-					fmt.Println("[DEBUG][WACE] Active model: ", model)
-				}
+				// for _, model := range activeModels {
+				// 	////fmt.Println("[DEBUG][WACE] Active model: ", model)
+				// }
 			}
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.reqHeadModelIDs
@@ -183,7 +182,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 
 		err := wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders, activeModels)
 		if err != nil {
-			fmt.Printf("[ERROR][WACE] Error processing request headers by WACE: %v\n", err)
+			//fmt.Printf("[ERROR][WACE] Error processing request headers by WACE: %v\n", err)
 		}
 		// duration, _ := meter.Float64Histogram("http.client.request.headers.exceptions.duration.seconds")
 		// duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
@@ -203,11 +202,11 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		}
 		wafParams["phase"] = "1"
 
-		res, err := wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 		if err == nil {
 			if res {
-				fmt.Println("[DEBUG][WACE] Transaction blocked")
+				////fmt.Println("[DEBUG][WACE] Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
 
 				blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
@@ -275,9 +274,9 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["AllRequest"] {
 				requestExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeRequestModels = ParseActiveModels(requestExceptionRuleMessage)
-				for _, model := range activeRequestModels {
-					fmt.Println("[DEBUG][WACE] Active model: ", model)
-				}
+				// for _, model := range activeRequestModels {
+				// 	////fmt.Println("[DEBUG][WACE] Active model: ", model)
+				// }
 			}
 
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestBody"] {
@@ -286,32 +285,32 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["RequestBody"] {
 				requestBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeRequestBodyModels = ParseActiveModels(requestBodyExceptionRuleMessage)
-				for _, model := range activeRequestBodyModels {
-					fmt.Println("[DEBUG][WACE] Active model: ", model)
-				}
+				// for _, model := range activeRequestBodyModels {
+				// 	////fmt.Println("[DEBUG][WACE] Active model: ", model)
+				// }
 			}
 		} else {
 			activeRequestBodyModels = t.waf.waceWafConfig.waceModels.reqBodyModelIDs
 			activeRequestModels = t.waf.waceWafConfig.waceModels.reqModelIDs
 		}
 		go func() {
-			fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
+			////fmt.Println("[DEBUG][WACE] Processing request body by WACE and Coraza")
 
 			// wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
 
 			err := wace.Analyze("RequestBody", t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
 			if err != nil {
-				fmt.Printf("[ERROR][WACE] Error processing request body by WACE: %v\n", err)
+				//fmt.Printf("[ERROR][WACE] Error processing request body by WACE: %v\n", err)
 			}
 		}()
 		go func() {
-			fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
+			////fmt.Println("[DEBUG][WACE] Processing request by WACE and Coraza")
 
 			//wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
 
-			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestBodyModels)
+			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
 			if err != nil {
-				fmt.Printf("[ERROR][WACE] Error processing request by WACE: %v\n", err)
+				//fmt.Printf("[ERROR][WACE] Error processing request by WACE: %v\n", err)
 			}
 		}()
 		duration, _ := meter.Float64Histogram("http.client.request.body.exceptions.duration.seconds")
@@ -322,7 +321,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if err != nil {
-		fmt.Println("[DEBUG][WACE] Error processing request body by Coraza: " + err.Error())
+		////fmt.Println("[DEBUG][WACE] Error processing request body by Coraza: " + err.Error())
 	}
 
 	mtRules := t.MatchedRules()
@@ -337,16 +336,16 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	wafParams["phase"] = "2"
 
 	// TODO: Get decision plugin id from the configstore
-	result, err := wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+	result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
-	if err == nil {
+	if err2 == nil {
 		if result {
-			fmt.Println("[DEBUG][WACE] Transaction blocked")
+			////fmt.Println("[DEBUG][WACE] Transaction blocked")
 			interruption = &types.Interruption{Action: "deny"}
 
-			blocked, err := meter.Int64Counter("http.client.request.blockedp2.total")
-			if err != nil {
-				panic(err)
+			blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
+			if err2 != nil {
+				panic(err2)
 			}
 			blocked.Add(ctx, 1)
 		}
@@ -360,7 +359,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 }
 
 func (t WaceTransaction) AddResponseHeader(key string, value string) {
-	// fmt.Printf("[DEBUG][WACE] Adding response header: %v: %d\n", key, time.Since(tiempo).Milliseconds())
+	// //fmt.Printf("[DEBUG][WACE] Adding response header: %v: %d\n", key, time.Since(tiempo).Milliseconds())
 	start := time.Now()
 	t.Transaction.AddResponseHeader(key, value)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
@@ -371,6 +370,7 @@ func (t WaceTransaction) AddResponseHeader(key string, value string) {
 	
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 
+	//fmt.Printf("[DEBUG][WACE] Response header added: %v: %v\n", key, value)
 }
 
 // var tiempo time.Time
@@ -382,7 +382,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 
 	*t.responseLine = proto + " " + fmt.Sprint(code)
 	go func() {
-		fmt.Println("[DEBUG][WACE] Processing response headers by WACE and Coraza")
+		////fmt.Println("[DEBUG][WACE] Processing response headers by WACE and Coraza")
 
 		var activeModels []string
 
@@ -400,9 +400,9 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 				responseHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeModels = ParseActiveModels(responseHeadersExceptionRuleMessage)
 
-				for _, model := range activeModels {
-					fmt.Println("[DEBUG][WACE] Active model: ", model)
-				}
+				// for _, model := range activeModels {
+				// 	////fmt.Println("[DEBUG][WACE] Active model: ", model)
+				// }
 			}
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.respHeadModelIDs
@@ -411,7 +411,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 
 		err := wace.Analyze("ResponseHeaders", t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders, activeModels)
 		if err != nil {
-			fmt.Printf("[ERROR][WACE] Error processing response headers by WACE: %v\n", err)
+			//fmt.Printf("[ERROR][WACE] Error processing response headers by WACE: %v\n", err)
 		}
 
 	}()
@@ -430,11 +430,11 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		}
 		wafParams["phase"] = "3"
 
-		res, err := wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 		if err == nil {
 			if res {
-				fmt.Println("[DEBUG][WACE] Transaction blocked")
+				////fmt.Println("[DEBUG][WACE] Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
 
 				blocked, err := meter.Int64Counter("http.client.request.blockedp3.total")
@@ -474,6 +474,7 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 	
 	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
 
+	//fmt.Printf("[DEBUG][WACE] Response Body written: %v\n", string(b))
 	return interruption, cantB, err
 }
 
@@ -499,9 +500,9 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["AllResponse"] {
 				responseExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeResponseModels = ParseActiveModels(responseExceptionRuleMessage)
-				for _, model := range activeResponseModels {
-					fmt.Println("[DEBUG][WACE] Active model: ", model)
-				}
+				// for _, model := range activeResponseModels {
+				// 	////fmt.Println("[DEBUG][WACE] Active model: ", model)
+				// }
 			}
 
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseBody"] {
@@ -510,9 +511,9 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["ResponseBody"] {
 				responseBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeResponseBodyModels = ParseActiveModels(responseBodyExceptionRuleMessage)
-				for _, model := range activeResponseBodyModels {
-					fmt.Println("[DEBUG][WACE] Active model: ", model)
-				}
+				// for _, model := range activeResponseBodyModels {
+				// 	////fmt.Println("[DEBUG][WACE] Active model: ", model)
+				// }
 			}
 		} else {
 			activeResponseBodyModels = t.waf.waceWafConfig.waceModels.respBodyModelIDs
@@ -520,23 +521,23 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		}
 
 		go func() {
-			fmt.Println("[DEBUG][WACE] Processing response body by WACE and Coraza")
+			////fmt.Println("[DEBUG][WACE] Processing response body by WACE and Coraza")
 
 			// wace.AnalyzeResponseBody(t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
 
 			err := wace.Analyze("ResponseBody", t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
 			if err != nil {
-				fmt.Printf("[ERROR][WACE] Error processing response body by WACE: %v\n", err)
+				//fmt.Printf("[ERROR][WACE] Error processing response body by WACE: %v\n", err)
 			}
 		}()
 		go func() {
-			fmt.Println("[DEBUG][WACE] Processing response by WACE and Coraza")
+			////fmt.Println("[DEBUG][WACE] Processing response by WACE and Coraza")
 
 			// wace.AnalyzeResponse(t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders+"\n"+*t.responseBody, activeResponseModels)
 
 			err := wace.Analyze("AllResponse", t.Transaction.ID(), *t.requestBody, activeResponseModels)
 			if err != nil {
-				fmt.Printf("[ERROR][WACE] Error processing response by WACE: %v\n", err)
+				//fmt.Printf("[ERROR][WACE] Error processing response by WACE: %v\n", err)
 			}
 		}()
 	}()
@@ -554,16 +555,16 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	}
 	wafParams["phase"] = "4"
 
-	res, err := wace.CheckTransaction(t.Transaction.ID(), "simple", wafParams)
+	res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
-	if err == nil {
+	if err2 == nil {
 		if res {
-			fmt.Println("[DEBUG][WACE] Transaction blocked")
+			////fmt.Println("[DEBUG][WACE] Transaction blocked")
 			interruption = &types.Interruption{Action: "deny"}
 
-			blocked, err := meter.Int64Counter("http.client.request.blockedp4.total")
-			if err != nil {
-				panic(err)
+			blocked, err2 := meter.Int64Counter("http.client.request.blockedp4.total")
+			if err2 != nil {
+				panic(err2)
 			}
 			blocked.Add(ctx, 1)
 		}
@@ -612,10 +613,13 @@ func (t WaceTransaction) ProcessLogging() {
 var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
 
 // https://github.com/open-telemetry/opentelemetry-go-contrib/blob/main/examples/otel-collector/main.go
-func initConn() (*grpc.ClientConn, error) {
+func initConn(url string) (*grpc.ClientConn, error) {
 	// It connects the OpenTelemetry Collector through local gRPC connection.
 	// You may replace `localhost:4317` with your endpoint.
-	conn, err := grpc.NewClient("localhost:4317",
+	if url == "" {
+		url = "localhost:4317"
+	}
+	conn, err := grpc.NewClient(url,
 		// Note the use of insecure transport here. TLS is recommended in production.
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
@@ -640,9 +644,9 @@ func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.C
 
 	// Check if MeterProvider is already setted
 	if otel.GetMeterProvider() != nil {
-		fmt.Printf("MeterProvider already setted")
+		//fmt.Printf("MeterProvider already setted")
 	} else {
-		fmt.Printf("MeterProvider not setted")
+		//fmt.Printf("MeterProvider not setted")
 	}
 
 	globalMeterProvider = meterProvider
@@ -657,8 +661,8 @@ func getWaceMeter() metric.Meter {
 	return globalMeterProvider.Meter("wace")
 }
 
-func InitMetrics(ctx context.Context) {
-	conn, err := initConn()
+func InitMetrics(ctx context.Context, url string) {
+	conn, err := initConn(url)
 	if err != nil {
 		panic(err)
 	}
