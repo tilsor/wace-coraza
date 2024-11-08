@@ -109,6 +109,7 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
+	wace.InitTransaction(CRSTransaction.ID())
 	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
 	return t
 }
