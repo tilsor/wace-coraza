@@ -39,6 +39,7 @@ type WaceTransaction struct {
 	requestLine          *string
 	requestHeaders       *string
 	requestBody          *string
+	responseStatusCode   *int
 	responseLine         *string
 	responseHeaders      *string
 	responseBody         *string
@@ -118,7 +119,7 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
-	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(string), new(string), new(string), &crsTime, &integrationTime, start}
+	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(int), new(string), new(string), new(string), &crsTime, &integrationTime, start}
 	w.logger.TPrintln(lg.DEBUG,CRSTransaction.ID(), "New WACEWAF transaction created")
 	return t
 }
@@ -405,6 +406,7 @@ func (t WaceTransaction) AddResponseHeader(key string, value string) {
 func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.Interruption {
 	start := time.Now()
 
+	*t.responseStatusCode = code
 	*t.responseLine = proto + " " + fmt.Sprint(code)
 	go func() {
 		t.waf.logger.TPrintln(lg.DEBUG,t.Transaction.ID(), "Processing response headers by WACE and Coraza")
@@ -638,7 +640,7 @@ func (t WaceTransaction) ProcessLogging() {
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR,t.Transaction.ID(), "Error getting processed counter: " + err.Error())
 		} else {
-			processed.Add(ctx, 1)
+			processed.Add(ctx, 1, metric.WithAttributes(semconv.HTTPResponseStatusCode(*t.responseStatusCode)))
 			t.waf.logger.TPrintln(lg.DEBUG,t.Transaction.ID(), "Request processed")
 		}
 
