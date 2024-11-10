@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
@@ -46,6 +47,7 @@ type WaceTransaction struct {
 	CRSExecTime          *int64
 	IntegrationTime 	 *int64
 	startTime             time.Time
+	coordinator 		 *sync.WaitGroup
 }
 
 var gConfig *generalConfig
@@ -118,7 +120,8 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
-	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(int), new(string), new(string), new(string), &crsTime, &integrationTime, start}
+	wace.InitTransaction(CRSTransaction.ID())
+	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(int), new(string), new(string), new(string), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
 	w.logger.TPrintln(lg.DEBUG,CRSTransaction.ID(), "New WACEWAF transaction created")
 	return t
 }
@@ -168,6 +171,7 @@ func (t WaceTransaction) AddRequestHeader(key string, value string) {
 // TODO: Add early check for phase 1
 func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	start := time.Now()
+	t.coordinator.Add(1)
 	go func() {
 		t.waf.logger.TPrintln(lg.DEBUG,t.Transaction.ID(), "Processing request headers by WACE and Coraza")
 
@@ -204,6 +208,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		}
 		// duration, _ := meter.Float64Histogram("http.client.request.headers.exceptions.duration.seconds")
 		// duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
+		t.coordinator.Done()
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
@@ -220,6 +225,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		}
 		wafParams["phase"] = "1"
 
+		t.coordinator.Done()
 		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 		if err == nil {
@@ -272,6 +278,7 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 // Implements the ProcessRequestBody interface provided by Coraza WAF to process request body by WACE and Coraza
 func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	start := time.Now()
+	t.coordinator.Add(2)
 	go func() {
 		var activeRequestBodyModels []string
 		var activeRequestModels []string
@@ -326,6 +333,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR,t.Transaction.ID(), "Error processing request body by WACE: " + err.Error())
 			}
+			t.coordinator.Done()
 		}()
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG,t.Transaction.ID(), "Processing request by WACE and Coraza")
@@ -336,6 +344,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR,t.Transaction.ID(), "Error processing request by WACE: " + err.Error())
 			}
+			t.coordinator.Done()
 		}()
 		duration, _ := meter.Float64Histogram("http.client.request.body.exceptions.duration.seconds")
 		duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
@@ -359,7 +368,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	}
 	wafParams["phase"] = "2"
 
-	// TODO: Get decision plugin id from the configstore
+	t.coordinator.Wait()
 	result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 	if err2 == nil {

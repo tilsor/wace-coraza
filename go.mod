@@ -11,7 +11,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
-	github.com/klauspost/compress v1.17.2 // indirect
+	github.com/klauspost/compress v1.17.8 // indirect
 	github.com/magefile/mage v1.15.0 // indirect
 	github.com/nats-io/nats.go v1.37.0 // indirect
 	github.com/nats-io/nkeys v0.4.7 // indirect
@@ -20,7 +20,6 @@ require (
 	github.com/tidwall/gjson v1.17.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tilsor/ModSecIntl_logging v1.0.0 // indirect
 	go.opentelemetry.io/otel/trace v1.31.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	golang.org/x/crypto v0.28.0 // indirect
@@ -35,6 +34,7 @@ require (
 )
 
 require (
+	github.com/tilsor/ModSecIntl_logging v1.0.0
 	gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core v0.0.0-20240805232631-6427ad0a6aa8
 	go.opentelemetry.io/otel v1.31.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.31.0
@@ -44,6 +44,3 @@ require (
 	google.golang.org/grpc v1.67.1
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-// replace gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core => gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core.git v0.0.0-20240805232631-6427ad0a6aa8
-replace gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core => ../../test_metricas/ModSecIntl_wace_core
