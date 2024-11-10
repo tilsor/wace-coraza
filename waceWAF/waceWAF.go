@@ -115,7 +115,6 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 	start := time.Now()
 
 	CRSTransaction := w.WAF.NewTransaction()
-	w.logger.StartTransaction(CRSTransaction.ID())
 
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
