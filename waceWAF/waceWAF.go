@@ -207,7 +207,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request headers by WACE: "+err.Error())
 		}
-		// duration, _ := meter.Float64Histogram("http.client.request.headers.exceptions.duration.seconds")
+		// duration, _ := meter.Float64Histogram("http.client.request.headers.exceptions.duration.nanoseconds")
 		// duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
 		t.coordinator.Done()
 	}()
@@ -269,7 +269,7 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 	interruption2, cantB2, err := t.Transaction.ReadRequestBodyFrom(&buf)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	duration, _ := meter.Float64Histogram("http.client.request.body.read.duration.seconds")
+	duration, err := meter.Float64Histogram("http.client.request.body.read.duration.nanoseconds")
 	duration.Record(ctx, (float64(time.Since(startTime).Nanoseconds())))
 
 	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
@@ -349,7 +349,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			}
 			t.coordinator.Done()
 		}()
-		duration, _ := meter.Float64Histogram("http.client.request.body.exceptions.duration.seconds")
+		duration, _ := meter.Float64Histogram("http.client.request.body.exceptions.duration.nanoseconds")
 		duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
 	}()
 
@@ -505,7 +505,7 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 	interruption, cantB, err = t.Transaction.WriteResponseBody(b)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	duration, err := meter.Float64Histogram("http.client.response.body.read.duration.seconds")
+	duration, err := meter.Float64Histogram("http.client.response.body.read.duration.nanoseconds")
 	duration.Record(ctx, (float64(time.Since(startTime).Nanoseconds())))
 
 	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
@@ -626,7 +626,7 @@ func (t WaceTransaction) ProcessLogging() {
 	go wace.CloseTransaction(t.Transaction.ID())
 
 	go func() {
-		execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.seconds")
+		execTime, err := meter.Int64Histogram("http.client.request.processed.CRSExecTime.nanoseconds")
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting CRS histogram: "+err.Error())
 		} else {
@@ -634,7 +634,7 @@ func (t WaceTransaction) ProcessLogging() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "CRS Execution time: "+fmt.Sprint(*t.CRSExecTime/1000000)+" ms")
 		}
 
-		duration, err := meter.Float64Histogram("http.client.request.processed.duration.seconds")
+		duration, err := meter.Float64Histogram("http.client.request.processed.duration.nanoseconds")
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting request histogram: "+err.Error())
 		} else {
@@ -651,7 +651,7 @@ func (t WaceTransaction) ProcessLogging() {
 		}
 
 		*t.IntegrationTime += time.Since(start).Nanoseconds()
-		durationInt, err := meter.Float64Histogram("http.client.integration.processed.duration.seconds")
+		durationInt, err := meter.Float64Histogram("http.client.integration.processed.duration.nanoseconds")
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting integration histogram: "+err.Error())
 		} else {
