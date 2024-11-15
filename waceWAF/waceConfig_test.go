@@ -102,7 +102,7 @@ func TestParseUnexceptedModels(t *testing.T){
 
 func TestGeneralConfigLoadConfig(t *testing.T) {
 	gConfig := generalConfig{}
-	configFilePath := "../../caddy_wace/waceconfig.yaml" // Ruta al archivo de configuración general
+	configFilePath := "./waceconfig.yaml" // Ruta al archivo de configuración general
 
 	err := gConfig.LoadConfig(configFilePath)
 	if err != nil {

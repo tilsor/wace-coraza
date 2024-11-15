@@ -35,7 +35,7 @@ require (
 
 require (
 	github.com/tilsor/ModSecIntl_logging v1.0.0
-	gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core v0.0.0-20241113160858-f22cfeb301cd
+	gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core v0.0.0-20241115050318-fdb6813a2797
 	go.opentelemetry.io/otel v1.31.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.31.0
 	go.opentelemetry.io/otel/metric v1.31.0
