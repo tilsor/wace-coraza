@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -113,7 +114,6 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 }
 
 // Implements the NewTransaction interfaces provided by Coraza WAF to return a new WaceTransaction transaction
-// TODO: Delete the debug prints
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	start := time.Now()
 
@@ -154,7 +154,6 @@ func (t WaceTransaction) SetServerName(serverName string) {
 	t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Server name set: "+serverName)
 }
 
-// TODO: Check how the headers are appended to the variable
 func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	start := time.Now()
 	t.Transaction.AddRequestHeader(key, value)
@@ -169,7 +168,6 @@ func (t WaceTransaction) AddRequestHeader(key string, value string) {
 }
 
 // Implements the ProcessRequestHeaders interface provided by Coraza WAF to process request headers by WACE and Coraza
-// TODO: Add early check for phase 1
 func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	start := time.Now()
 	t.coordinator.Add(1)
@@ -201,14 +199,17 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			activeModels = t.waf.waceWafConfig.waceModels.reqHeadModelIDs
 		}
 
-		// wace.AnalyzeReqLineAndHeaders(t.Transaction.ID(), *t.requestLine, *t.requestHeaders, activeModels)
+		exceptionsDuration, err := meter.Float64Histogram("http.exceptions.duration.nanoseconds")
+		if err != nil {
+			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting exceptions histogram: "+err.Error())
+		} else {
+			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "1")))
+		}
 
-		err := wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders, activeModels)
+		err = wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders, activeModels)
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request headers by WACE: "+err.Error())
 		}
-		// duration, _ := meter.Float64Histogram("http.client.request.headers.exceptions.duration.nanoseconds")
-		// duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
 		t.coordinator.Done()
 	}()
 
@@ -327,10 +328,14 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			activeRequestBodyModels = t.waf.waceWafConfig.waceModels.reqBodyModelIDs
 			activeRequestModels = t.waf.waceWafConfig.waceModels.reqModelIDs
 		}
+		exceptionsDuration, err := meter.Float64Histogram("http.exceptions.duration.nanoseconds")
+		if err != nil {
+			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting exceptions histogram: "+err.Error())
+		} else {
+			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "2")))
+		}
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing request body by WACE and Coraza")
-
-			// wace.AnalyzeRequestBody(t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
 
 			err := wace.Analyze("RequestBody", t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
 			if err != nil {
@@ -341,16 +346,12 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing request by WACE and Coraza")
 
-			//wace.AnalyzeRequest(t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
-
 			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request by WACE: "+err.Error())
 			}
 			t.coordinator.Done()
 		}()
-		duration, _ := meter.Float64Histogram("http.client.request.body.exceptions.duration.nanoseconds")
-		duration.Record(ctx, (float64(time.Since(start).Nanoseconds())))
 	}()
 
 	interruption, err := t.Transaction.ProcessRequestBody()
@@ -445,9 +446,15 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.respHeadModelIDs
 		}
-		// wace.AnalyzeRespLineAndHeaders(t.Transaction.ID(), *t.responseLine, *t.responseHeaders, activeModels)
 
-		err := wace.Analyze("ResponseHeaders", t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders, activeModels)
+		exceptionsDuration, err := meter.Float64Histogram("http.exceptions.duration.nanoseconds")
+		if err != nil {
+			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting exceptions histogram: "+err.Error())
+		} else {
+			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "3")))
+		}
+
+		err = wace.Analyze("ResponseHeaders", t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders, activeModels)
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing response headers by WACE: "+err.Error())
 		}
@@ -560,6 +567,13 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		} else {
 			activeResponseBodyModels = t.waf.waceWafConfig.waceModels.respBodyModelIDs
 			activeResponseModels = t.waf.waceWafConfig.waceModels.respModelIDs
+		}
+
+		exceptionsDuration, err := meter.Float64Histogram("http.exceptions.duration.nanoseconds")
+		if err != nil {
+			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting exceptions histogram: "+err.Error())
+		} else {
+			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "4")))
 		}
 
 		go func() {

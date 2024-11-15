@@ -1,7 +1,6 @@
 package waceWAF
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"strconv"
@@ -16,7 +15,6 @@ import (
 )
 
 type generalConfig struct {
-	natsURL              string
 	otelURL              string
 	waceModels           *WaceModels
 	waceDecisions        []string
@@ -73,13 +71,10 @@ func (g *generalConfig) LoadGeneralConfigYaml(config []byte) error {
 		return err
 	}
 	for key, value := range inConf.Options {
-		fmt.Printf("key: %s, value: %s\n", key, value)
 		if key == "early_blocking" {
 			g.earlyBlocking = value == "true"
 		} else if key == "crs_version" {
 			g.crsVersion = value
-		} else if key == "natsurl" {
-			g.natsURL = value
 		} else if key == "otelurl" {
 			g.otelURL = value
 		}
@@ -111,15 +106,11 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	for key, value := range inConf.Options {
 		if key == "early_blocking" {
 			w.earlyBlocking = value == "true"
-		} else if key == "appname" {
-			fmt.Printf("App name: %s\n", value)
 		}
 	}
 
 	w.waceModels = NewWaceModelsConfig(inConf.ModelIds)
 	w.waceDecisionId = inConf.DecisionId
-	fmt.Printf("Model IDs: %v\n", w.waceModels.reqHeadModelIDs)
-	fmt.Printf("Decision ID: %s\n", w.waceDecisionId)
 	return err
 }
 
@@ -338,7 +329,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id" + strconv.Itoa(gConfig.ruleIdsForExceptions["RequestBody"]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["RequestBody"]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""

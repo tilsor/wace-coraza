@@ -1,9 +1,8 @@
 package waceWAF
 
 import (
-	"testing"
 	"reflect"
-
+	"testing"
 	// wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
 	// cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
 )
@@ -110,11 +109,6 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 		t.Fatalf("Error al cargar configuración general: %v", err)
 	}
 
-	// Verifica algunos valores de configuración cargados, según tus necesidades
-	if gConfig.natsURL == "" {
-		t.Error("natsURL debería estar configurado")
-	}
-
 	if gConfig.crsVersion == "" {
 		t.Error("crsVersion debería estar configurado")
 	}
@@ -143,7 +137,6 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 // Ejemplo de prueba para waceWAFConfig.LoadConfigFromGeneralConfig
 func TestLoadConfigFromGeneralConfig(t *testing.T) {
 	gConfig := generalConfig{
-		natsURL:       "http://localhost:4222",
 		otelURL:       "http://localhost:4317",
 		waceDecisions: []string{"decision1"},
 		earlyBlocking: false,
