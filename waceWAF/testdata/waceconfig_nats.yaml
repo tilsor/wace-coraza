@@ -13,11 +13,13 @@ modelplugins:
     path: "testdata/trivial.so"
     weight: 0.25
     mode: sync
+    remote: true
   - id: "trivial2"
     plugintype: RequestHeaders
     path: "testdata/trivial2.so"
     weight: 0.25
     mode: sync
+    remote: true
 
 decisionplugins:
   - id: "weighted_sum"

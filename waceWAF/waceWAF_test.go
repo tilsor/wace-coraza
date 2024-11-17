@@ -328,6 +328,44 @@ func BenchmarkWaceTransactions(b *testing.B) {
 	}
 }
 
+func BenchmarkWaceTransactionsNATS(b *testing.B) {
+	file, err := os.ReadFile("testdata/waceconfig_nats.yaml")
+	if err != nil {
+		b.Errorf("Error reading config file: %v", err.Error())
+	}
+	gConfig = new(generalConfig)
+	gConfig.LoadGeneralConfigYaml(file)
+	InitMetrics(ctx, gConfig.otelURL)
+	wace.Init(getWaceMeter())
+	wafConfig := NewWAFConfig()
+	wafConfig = wafConfig.WithDirectivesFromFile("../coraza.conf").
+	WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+	WithDirectivesFromFile("../coreruleset/rules/*.conf")
+	waf, err := NewWAF(wafConfig)
+	if err != nil {
+		b.Errorf("Error creating WAF: %v", err.Error())
+	}
+	for i := 0; i < b.N; i++ {
+		tx := waf.NewTransaction()
+		if tx == nil {
+			b.Errorf("Error creating transaction")
+		}
+		tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+		tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+		tx.SetServerName("Apache")
+		tx.ProcessRequestHeaders()
+		body := "test"
+		reader := strings.NewReader(body)
+		tx.ReadRequestBodyFrom(reader)
+		tx.ProcessRequestBody()
+		tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+		tx.ProcessResponseHeaders(200, "HTTP/1.1")
+		tx.WriteResponseBody([]byte(body))
+		tx.ProcessResponseBody()
+		tx.ProcessLogging()
+	}
+}
+
 func BenchmarkCorazaTransactions(b *testing.B){
 	wafConfig := coraza.NewWAFConfig()
 	wafConfig = wafConfig.WithDirectivesFromFile("../coraza.conf").

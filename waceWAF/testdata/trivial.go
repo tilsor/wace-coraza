@@ -26,7 +26,8 @@ func InitPlugin(params map[string]string, meter metric.Meter) error {
 	return nil
 }
 
-func InitPluginAsync(params map[string]string, natsManager func(func(pm.ModelInput) (pm.ModelResults, error))) error {
+func InitPluginAsync(params map[string]string, meter metric.Meter, natsManager func(func(pm.ModelInput) (pm.ModelResults, error))) error {
+	InitPlugin(params, meter)
 	natsManager(Process)
 	return nil
 }
