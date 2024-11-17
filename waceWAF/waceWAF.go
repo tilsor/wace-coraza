@@ -227,7 +227,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		}
 		wafParams["phase"] = "1"
 
-		t.coordinator.Done()
+		t.coordinator.Wait()
 		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 		if err == nil {
@@ -475,6 +475,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		}
 		wafParams["phase"] = "3"
 
+		t.coordinator.Wait()
 		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 		if err == nil {

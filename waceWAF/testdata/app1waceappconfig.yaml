@@ -1,0 +1,6 @@
+modelids: ["trivial"]
+
+decisionid: "weighted_sum"
+
+options:
+  appname: "Application 1"

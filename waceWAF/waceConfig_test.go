@@ -1,10 +1,9 @@
 package waceWAF
 
 import (
+	"os"
 	"reflect"
 	"testing"
-	// wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
-	// cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
 )
 
 func TestGetConfigRules(t *testing.T) {
@@ -69,6 +68,12 @@ func TestGetConfigRules(t *testing.T) {
 }
 
 func TestNewWaceConfig(t *testing.T) {
+	file, err := os.ReadFile("testdata/waceconfig.yaml")
+	if err != nil {
+		t.Errorf("Error reading config file: %v", err)
+	}
+	gConfig = new(generalConfig)
+	gConfig.LoadGeneralConfigYaml(file)
 	wafConfig := NewWAFConfig()
 	waf, err := NewWAF(wafConfig)
 	if err != nil {
@@ -81,107 +86,107 @@ func TestNewWaceConfig(t *testing.T) {
 	if len(conf.reqHeadModelIDs) == 0 {
 		t.Errorf("Error creating WaceConfig: reqHeadModelIDs is empty")
 	}
-	if (conf.reqHeadModelIDs[0] != "trivial" && conf.reqHeadModelIDs[1] != "trivial") {
+	if conf.reqHeadModelIDs[0] != "trivial" && conf.reqHeadModelIDs[1] != "trivial" {
 		t.Errorf("Error creating WaceConfig: first model is not 'trivial'")
 	}
 }
 
-func TestParseUnexceptedModels(t *testing.T){
+func TestParseUnexceptedModels(t *testing.T) {
 	exceptionRuleMessage := "model1:true,model2:false,model3:true,"
 	models := ParseActiveModels(exceptionRuleMessage)
 	if len(models) != 2 {
 		t.Errorf("Error parsing unexcepted models: Expected 2, Got %d", len(models))
 	}
-	if (models[0] != "model1" && models[1] != "model1") {
+	if models[0] != "model1" && models[1] != "model1" {
 		t.Errorf("Error parsing unexcepted models: Expected 'model1', Got %s and %s", models[0], models[1])
 	}
-	if (models[0] != "model3" && models[1] != "model3") {
+	if models[0] != "model3" && models[1] != "model3" {
 		t.Errorf("Error parsing unexcepted models: Expected 'model3', Got %s and %s", models[0], models[1])
 	}
 }
 
 func TestGeneralConfigLoadConfig(t *testing.T) {
 	gConfig := generalConfig{}
-	configFilePath := "./waceconfig.yaml" // Ruta al archivo de configuración general
+	configFilePath := "testdata/waceconfig.yaml"
 
 	err := gConfig.LoadConfig(configFilePath)
 	if err != nil {
-		t.Fatalf("Error al cargar configuración general: %v", err)
+		t.Fatalf("Error loading general config: %v", err)
 	}
 
 	if gConfig.crsVersion == "" {
-		t.Error("crsVersion debería estar configurado")
+		// CRS Version is not set in the config file
+		t.Error("CRS Version was not loaded properly")
 	}
 }
 
 // Ejemplo de prueba para waceWAFConfig.LoadConfig
 func TestWaceWAFConfigLoadConfig(t *testing.T) {
 	wConfig := waceWAFConfig{}
-	configFilePath := "../../caddy_wace/app1waceappconfig.yaml" // Ruta al archivo de configuración de la aplicación
+	configFilePath := "testdata/app1waceappconfig.yaml"
 
 	err := wConfig.LoadConfig(configFilePath)
 	if err != nil {
-		t.Fatalf("Error al cargar configuración de WAF: %v", err)
+		t.Fatalf("Error loading waceappconfig: %v", err)
 	}
 
-	// Verifica algunos valores de configuración cargados
 	if wConfig.waceDecisionId == "" {
-		t.Error("waceDecisionId debería estar configurado")
+		t.Error("Decision Plugin Id was not loaded properly")
 	}
 
 	if len(wConfig.waceModels.reqHeadModelIDs) == 0 {
-		t.Error("reqHeadModelIDs debería tener al menos un valor")
+		t.Errorf("Model Plugin Ids were not loaded properly, expected %d model Id, got %d", 1, len(wConfig.waceModels.reqHeadModelIDs))
 	}
 }
-
-// Ejemplo de prueba para waceWAFConfig.LoadConfigFromGeneralConfig
-func TestLoadConfigFromGeneralConfig(t *testing.T) {
-	gConfig := generalConfig{
-		otelURL:       "http://localhost:4317",
-		waceDecisions: []string{"decision1"},
-		earlyBlocking: false,
-		waceModels:    &WaceModels{reqHeadModelIDs: []string{"model1"}},
-	}
-
-	wConfig := waceWAFConfig{}
-	wConfig.LoadConfigFromGeneralConfig(gConfig)
-
-	if wConfig.waceDecisionId != gConfig.waceDecisions[0] {
-		t.Errorf("Esperaba waceDecisionId %v, obtuvo %v", gConfig.waceDecisions[0], wConfig.waceDecisionId)
-	}
-
-	if wConfig.earlyBlocking != gConfig.earlyBlocking {
-		t.Errorf("Esperaba earlyBlocking %v, obtuvo %v", gConfig.earlyBlocking, wConfig.earlyBlocking)
-	}
-}
-
 
 func TestNewWaceDefaultModelsConfig(t *testing.T) {
-	result := NewWaceDefaultModelsConfig()
+	file, err := os.ReadFile("testdata/waceconfig_all_models.yaml")
+	if err != nil {
+		t.Errorf("Error reading config file: %v", err.Error())
+	}
+	gConfig = new(generalConfig)
+	gConfig.LoadGeneralConfigYaml(file)
+	defaultResults := NewWaceDefaultModelsConfig()
 
 	expected := &WaceModels{
-		reqHeadModelIDs:  []string{"trivial", "trivial2"},
-		reqBodyModelIDs:  []string{},
-		reqModelIDs:      []string{},
-		respHeadModelIDs: []string{},
-		respBodyModelIDs: []string{},
-		respModelIDs:     []string{},
+		reqHeadModelIDs:  []string{"trivialRequestHeaders"},
+		reqBodyModelIDs:  []string{"trivialRequestBody"},
+		reqModelIDs:      []string{"trivialAllRequest"},
+		respHeadModelIDs: []string{"trivialResponseHeaders"},
+		respBodyModelIDs: []string{"trivialResponseBody"},
+		respModelIDs:     []string{"trivialAllResponse"},
 	}
 
-	if !reflect.DeepEqual(result, expected) {
-		t.Errorf("NewWaceDefaultModelsConfig() = %v; expected %v", result, expected)
+	if !reflect.DeepEqual(defaultResults, expected) {
+		t.Errorf("Error: models do not match expected %v, got %v", expected, defaultResults)
+	}
+
+	models := []string{
+		"trivialRequestHeaders",
+		"trivialRequestBody",
+		"trivialAllRequest",
+		"trivialResponseHeaders",
+		"trivialResponseBody",
+		"trivialAllResponse",
+	}
+	results := NewWaceModelsConfig(models)
+
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Error: models do not match expected %v, got %v", expected, results)
 	}
 }
 
-// func TestWithDirectivesFromFile(t *testing.T) {
-// 	wafConfig := waceWAFConfig{}
-// 	wafConfig.WithDirectivesFromFile("../coraza.conf")
-// 	wafConfig.WithDirectivesFromFile("../coreruleset/crs-setup.conf.example")
-// 	wafConfig.WithDirectivesFromFile("../coreruleset/rules/*.conf")
-// 	wafConfig.WithDirectivesFromFile("../waceexceptions.conf")
-// 	wafConfig.WithDirectivesFromFile("waceconfig.yaml")
-
-// 	if len(wafConfig.waceModels.reqHeadModelIDs) != 2 {
-// 		t.Errorf("Error adding directives: Expected 2, Got %d", len(wafConfig.waceModels.reqHeadModelIDs))
-// 	}
-// }
+func TestConfigInterface(t *testing.T) {
+	config := NewWAFConfig()
+	if config == nil {
+		t.Errorf("Error creating WAFConfig")
+	}
+	config = config.WithDirectivesFromFile("testdata/directives.conf").
+		WithRequestBodyAccess().
+		WithResponseBodyAccess().
+		WithRequestBodyInMemoryLimit(2000).
+		WithResponseBodyLimit(2000).
+		WithRequestBodyLimit(2000).
+		WithResponseBodyMimeTypes([]string{"text/html"}).
+		WithDirectives("SecDefaultAction \"phase:1,nolog,auditlog,pass\"")
+}

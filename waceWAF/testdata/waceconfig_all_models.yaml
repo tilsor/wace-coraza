@@ -1,0 +1,62 @@
+#WACE configuration file
+
+# WACE general configuration
+#The full path to the wace log file
+logpath: "/dev/null"
+#The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
+loglevel: "DEBUG"
+
+#The model plugins configuration
+modelplugins:
+  - id: "trivialRequestHeaders"
+    plugintype: RequestHeaders
+    path: "testdata/trivial.so"
+    weight: 0.1
+    mode: sync
+  - id: "trivialRequestBody"
+    plugintype: RequestBody
+    path: "testdata/trivial.so"
+    weight: 0.1
+    mode: sync
+  - id: "trivialAllRequest"
+    plugintype: AllRequest
+    path: "testdata/trivial.so"
+    weight: 0.1
+    mode: sync
+  - id: "trivialResponseHeaders"
+    plugintype: ResponseHeaders
+    path: "testdata/trivial.so"
+    weight: 0.1
+    mode: sync
+  - id: "trivialResponseBody"
+    plugintype: ResponseBody
+    path: "testdata/trivial.so"
+    weight: 0.1
+    mode: sync
+  - id: "trivialAllResponse"
+    plugintype: AllResponse
+    path: "testdata/trivial.so"
+    weight: 0.1
+    mode: sync
+
+decisionplugins:
+  - id: "weighted_sum"
+    path: "testdata/weighted_sum.so"
+    params:
+      waf_weight: "0.5"
+      threshold: "0.5"
+
+natsurl: "localhost:4222"
+
+options:
+  otelurl: "localhost:4317"
+  crs_version: "4.4.0-dev"
+  early_blocking: "true"
+
+ruleidsforexceptions:
+  RequestHeaders: 100
+  RequestBody: 200
+  AllRequest: 300
+  ResponseHeaders: 400
+  ResponseBody: 500
+  AllResponse: 600
