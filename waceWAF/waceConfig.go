@@ -234,7 +234,7 @@ func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 	}
 }
 
-// TODO: Check for a default value for CRS
+// NewWAFConfig creates a new WAFConfig with default values
 func NewWAFConfig() coraza.WAFConfig {
 	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, "", false}
 }
@@ -339,7 +339,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["AllRequest"]) + " phase:2, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["AllRequest"]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -350,7 +350,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["ResponseHeaders"]) + " phase:3, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["ResponseHeaders"]) + ", phase:3, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -361,7 +361,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["ResponseBody"]) + " phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["ResponseBody"]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -371,7 +371,7 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["AllResponse"]) + " phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["AllResponse"]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 	}
 	initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""
