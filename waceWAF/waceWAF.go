@@ -360,6 +360,9 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 
 	interruption, err := t.Transaction.ProcessRequestBody()
 	if err != nil {
+		t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request body by Coraza: "+err.Error())
+	}
+	if interruption != nil {
 		*t.responseStatusCode = interruption.Status
 	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
