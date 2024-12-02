@@ -214,6 +214,9 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	}()
 
 	interruption := t.Transaction.ProcessRequestHeaders()
+	if interruption != nil {
+		*t.responseStatusCode = interruption.Status
+	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if t.waf.waceWafConfig.earlyBlocking {
@@ -234,6 +237,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			if res {
 				t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
+				*t.responseStatusCode = 403
 
 				blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
 				if err != nil {
@@ -355,6 +359,12 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	}()
 
 	interruption, err := t.Transaction.ProcessRequestBody()
+	if err != nil {
+		t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request body by Coraza: "+err.Error())
+	}
+	if interruption != nil {
+		*t.responseStatusCode = interruption.Status
+	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	if err != nil {
@@ -380,6 +390,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 			interruption = &types.Interruption{Action: "deny"}
+			*t.responseStatusCode = 403
 
 			blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
 			if err2 != nil {
