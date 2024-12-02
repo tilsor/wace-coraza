@@ -237,7 +237,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			if res {
 				t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
-				*t.responseStatusCode = interruption.Status
+				*t.responseStatusCode = 403
 
 				blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
 				if err != nil {
@@ -390,7 +390,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 			interruption = &types.Interruption{Action: "deny"}
-			*t.responseStatusCode = interruption.Status
+			*t.responseStatusCode = 403
 
 			blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
 			if err2 != nil {
