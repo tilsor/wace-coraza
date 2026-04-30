@@ -136,6 +136,21 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 	return t
 }
 
+// NewTransactionWithID implements the NewTransactionWithID interface provided by Coraza WAF to create a new WaceTransaction
+// which implements the Transaction interface provided by Coraza WAF and adds the WACE functionality to it
+func (w *WaceWAF) NewTransactionWithID(id string) types.Transaction {
+	start := time.Now()
+
+	CRSTransaction := w.WAF.NewTransactionWithID(id)
+
+	var integrationTime int64 = time.Since(start).Nanoseconds()
+	var crsTime int64 = time.Since(start).Nanoseconds()
+	wace.InitTransaction(CRSTransaction.ID())
+	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransactionWithID(id), w, new(pm.HTTPPayload), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
+	w.logger.TPrintln(lg.DEBUG, CRSTransaction.ID(), "New WACEWAF transaction created")
+	return t
+}
+
 // ProcessUri implements the ProcessURI interface provided by Coraza WAF to process the URI by WACE and Coraza
 func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion string) {
 	start := time.Now()

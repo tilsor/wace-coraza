@@ -81,6 +81,62 @@ func TestTransactionAddData(t *testing.T) {
 	}
 }
 
+func TestTransactionWithIDAddData(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Errorf("Error creating WAF: %v", err.Error())
+	}
+	tx := waf.NewTransactionWithID("1234567890123456")
+	if tx == nil {
+		t.Errorf("Error creating transaction")
+	}
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	body := "test"
+	reader := strings.NewReader(body)
+	_, count, err := tx.ReadRequestBodyFrom(reader)
+	if err != nil {
+		t.Errorf("Error reading request body: %v", err.Error())
+	}
+	if count != len(body) {
+		t.Errorf("Error reading request body: Expected bytes: %d, Got: %d", len(body), count)
+	}
+	tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+	_, count, err = tx.WriteResponseBody([]byte(body))
+	if err != nil {
+		t.Errorf("Error writing response body: %v", err.Error())
+	}
+	if count != len(body) {
+		t.Errorf("Error writing response body: Expected bytes: %d, Got: %d", len(body), count)
+	}
+	txW, ok := tx.(WaceTransaction)
+	if !ok {
+		t.Errorf("Error casting to WaceTransaction")
+	}
+	expectedPayload := pluginmanager.HTTPPayload{
+		URI:             "http://localhost:8090",
+		Method:          "GET",
+		HTTPVersion:     "HTTP/1.1",
+		RequestHeaders:  []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		RequestBody:     "test",
+		ResponseHeaders: []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		ResponseBody:    "test",
+	}
+	if !reflect.DeepEqual(*txW.httpPayload, expectedPayload) {
+		t.Errorf("Error processing http payload: Expected: %v, Got: %v", expectedPayload, *txW.httpPayload)
+	}
+}
+
 func TestTransactionProcess(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
