@@ -2,26 +2,26 @@
 
 # WACE general configuration
 #The full path to the wace log file
-logpath: "/dev/null"
+logpath: "/dev/stdout"
 #The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
-loglevel: "WARN"
+loglevel: "DEBUG"
 
 #The model plugins configuration
 modelplugins:
   - id: "trivial"
     plugintype: RequestHeaders
-    path: "testdata/trivial.so"
+    path: "wace_waf/testdata/plugins/trivial.so"
     weight: 0.25
     mode: sync
   - id: "trivial2"
     plugintype: RequestHeaders
-    path: "testdata/trivial2.so"
+    path: "wace_waf/testdata/plugins/trivial2.so"
     weight: 0.25
     mode: sync
 
 decisionplugins:
   - id: "weighted_sum"
-    path: "testdata/weighted_sum.so"
+    path: "wace_waf/testdata/plugins/weighted_sum.so"
     params:
       waf_weight: "0.5"
       threshold: "0.5"
@@ -29,7 +29,7 @@ decisionplugins:
 natsurl: "localhost:4222"
 
 options:
-  otelurl: "localhost:4317"
+  # otelurl: "localhost:4317"
   crs_version: "4.4.0-dev"
   early_blocking: "false"
 

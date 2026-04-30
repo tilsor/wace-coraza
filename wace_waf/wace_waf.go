@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -43,17 +44,10 @@ type WaceTransaction struct {
 	exceptionTransaction types.Transaction
 	waf                  *WaceWAF
 	httpPayload          *pm.HTTPPayload
-	// requestLine          *string
-	// requestHeaders       *string
-	// requestBody          *string
-	// responseStatusCode   *int
-	// responseLine         *string
-	// responseHeaders      *string
-	// responseBody         *string
-	CRSExecTime     *int64
-	IntegrationTime *int64
-	startTime       time.Time
-	coordinator     *sync.WaitGroup
+	CRSExecTime          *int64
+	IntegrationTime      *int64
+	startTime            time.Time
+	coordinator          *sync.WaitGroup
 }
 
 var gConfig *generalConfig
@@ -743,20 +737,13 @@ func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.C
 		sdkmetric.WithResource(res),
 	)
 
-	// Check if MeterProvider is already setted
-	if otel.GetMeterProvider() != nil {
-		//fmt.Printf("MeterProvider already setted")
-	} else {
-		//fmt.Printf("MeterProvider not setted")
-	}
-
 	globalMeterProvider = meterProvider
 	meter = globalMeterProvider.Meter("waceWAF")
 
 	return meterProvider.Shutdown, nil
 }
 
-var globalMeterProvider *sdkmetric.MeterProvider
+var globalMeterProvider metric.MeterProvider
 
 // getWaceMeter returns the meter for the WACE instrumentation.
 func getWaceMeter() metric.Meter {
@@ -764,7 +751,14 @@ func getWaceMeter() metric.Meter {
 }
 
 // InitMetrics initializes the OpenTelemetry metrics instrumentation.
-func InitMetrics(ctx context.Context, url string) {
+func InitMetrics(ctx context.Context, url string) (func(context.Context) error, error) {
+	if url == "" {
+		globalMeterProvider = noop.NewMeterProvider()
+		otel.SetMeterProvider(globalMeterProvider)
+		meter = globalMeterProvider.Meter("waceWAF")
+		return func(_ context.Context) error { return nil }, nil
+	}
+
 	conn, err := initConn(url)
 	if err != nil {
 		panic(err)
@@ -779,13 +773,18 @@ func InitMetrics(ctx context.Context, url string) {
 		panic(err)
 	}
 
-	_, err = initMeterProvider(ctx, res, conn)
+	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
-	// defer func() {
-	// 	if err := shutdownMeterProvider(ctx); err != nil {
-	// 		panic(err) // TODO handle error
-	// 	}
-	// }()
+
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(2*time.Second))),
+		sdkmetric.WithResource(res),
+	)
+
+	globalMeterProvider = meterProvider
+	meter = globalMeterProvider.Meter("waceWAF")
+
+	return meterProvider.Shutdown, nil
 }
