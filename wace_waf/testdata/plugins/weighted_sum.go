@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	lg "github.com/tilsor/ModSecIntl_logging/logging"
-	pm "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/pluginmanager"
+	pm "github.com/tilsor/ModSecIntl_wace_lib/pluginmanager"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -36,7 +36,7 @@ func InitPlugin(params map[string]string, meter metric.Meter) error {
 			return fmt.Errorf("error parsing threshold parameter: %v", err)
 		}
 	}
-		
+
 	// Create counter for plugin register
 	ctx := context.Background()
 	pluginCounter, err := meter.Int64Counter("plugin_register")
@@ -72,14 +72,14 @@ func CheckResults(decisionInput pm.DecisionInput) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("error parsing anomaly score threshold: %v", err)
 	}
-	
+
 	logger := lg.Get()
 	logger.TPrintf(lg.DEBUG, decisionInput.TransactionId, "weighted_sum | anomaly score: %v anomaly score threshold: %v", as, it)
 
 	if as >= it {
 		weightedSum += wafWeight
 	} else {
-		weightedSum += (as/it) * wafWeight
+		weightedSum += (as / it) * wafWeight
 	}
 	weightsSum += wafWeight
 

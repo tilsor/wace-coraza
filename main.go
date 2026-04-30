@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	waceWAF "gitlab.fing.edu.uy/gsi/pgrado-wace/poc/waceWAF"
+	waceWAF "github.com/tilsor/wace-coraza/wace_waf"
 
 	"github.com/corazawaf/coraza/v3"
 	txhttp "github.com/corazawaf/coraza/v3/http"

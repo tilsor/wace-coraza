@@ -13,8 +13,9 @@ import (
 	"github.com/corazawaf/coraza/v3/types"
 
 	lg "github.com/tilsor/ModSecIntl_logging/logging"
-	wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
-	cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
+	wace "github.com/tilsor/ModSecIntl_wace_lib"
+
+	pm "github.com/tilsor/ModSecIntl_wace_lib/pluginmanager"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -41,38 +42,48 @@ type WaceTransaction struct {
 	types.Transaction
 	exceptionTransaction types.Transaction
 	waf                  *WaceWAF
-	requestLine          *string
-	requestHeaders       *string
-	requestBody          *string
-	responseStatusCode   *int
-	responseLine         *string
-	responseHeaders      *string
-	responseBody         *string
-	CRSExecTime          *int64
-	IntegrationTime      *int64
-	startTime            time.Time
-	coordinator          *sync.WaitGroup
+	httpPayload          *pm.HTTPPayload
+	// requestLine          *string
+	// requestHeaders       *string
+	// requestBody          *string
+	// responseStatusCode   *int
+	// responseLine         *string
+	// responseHeaders      *string
+	// responseBody         *string
+	CRSExecTime     *int64
+	IntegrationTime *int64
+	startTime       time.Time
+	coordinator     *sync.WaitGroup
 }
 
 var gConfig *generalConfig
 var ctx = context.Background()
 var meter metric.Meter
+var configFilePath string
+
+func init() {
+	configFilePath = "waceconfig.yaml"
+}
 
 // NewWAF creates a new WaceWAF object with the given configuration
 func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	if gConfig == nil {
 		gConfig = new(generalConfig)
-		err := gConfig.LoadConfig("waceconfig.yaml")
+		confData, err := gConfig.LoadConfig(configFilePath)
 		if err != nil {
 			return nil, fmt.Errorf("Error loading general config: %v", err)
 		}
+
 		InitMetrics(ctx, gConfig.otelURL)
-		wace.Init(getWaceMeter())
-		errLog := lg.Get().LoadLogger(cf.Get().LogPath, cf.Get().LogLevel)
-		if errLog != nil {
-			return nil, fmt.Errorf("Error loading logger: %v", errLog)
+		// Initialize WACE call, wich validate and test configs
+		err = wace.Init(getWaceMeter(), confData.ConfigFileData)
+		if err != nil {
+			return nil, fmt.Errorf("Error WACE initialize failed: %v", err)
 		}
+
+		// After plugins are validated, we get the default plugin values.
+		gConfig.setDefaultPlugins(confData)
 	}
 
 	wafConfigs, ok := config.(*waceWAFConfig)
@@ -126,7 +137,7 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
 	wace.InitTransaction(CRSTransaction.ID())
-	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(string), new(string), new(string), new(int), new(string), new(string), new(string), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
+	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(pm.HTTPPayload), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
 	w.logger.TPrintln(lg.DEBUG, CRSTransaction.ID(), "New WACEWAF transaction created")
 	return t
 }
@@ -138,26 +149,29 @@ func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion strin
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.ProcessURI(uri, method, httpVersion)
-	*t.requestLine = method + " " + uri + " " + httpVersion
+	t.httpPayload.URI = uri
+	t.httpPayload.Method = method
+	t.httpPayload.HTTPVersion = httpVersion
+	// *t.requestLine = method + " " + uri + " " + httpVersion
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 
 	t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "URI processed: "+uri)
 }
 
-// SetServerName implements the SetServerName interface provided by Coraza WAF to set the server name by WACE and Coraza
-func (t WaceTransaction) SetServerName(serverName string) {
-	start := time.Now()
-	t.Transaction.SetServerName(serverName)
-	*t.CRSExecTime += time.Since(start).Nanoseconds()
+// // SetServerName implements the SetServerName interface provided by Coraza WAF to set the server name by WACE and Coraza
+// func (t WaceTransaction) SetServerName(serverName string) {
+// 	start := time.Now()
+// 	t.Transaction.SetServerName(serverName)
+// 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	t.exceptionTransaction.SetServerName(serverName)
-	*t.requestHeaders += "Server: " + serverName + "\n"
+// 	t.exceptionTransaction.SetServerName(serverName)
+// 	*t.requestHeaders += "Server: " + serverName + "\n"
 
-	*t.IntegrationTime += time.Since(start).Nanoseconds()
+// 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 
-	t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Server name set: "+serverName)
-}
+// 	t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Server name set: "+serverName)
+// }
 
 // AddRequestHeader implements the AddRequestHeader interface provided by Coraza WAF to add a request header by WACE and Coraza
 func (t WaceTransaction) AddRequestHeader(key string, value string) {
@@ -166,7 +180,8 @@ func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.AddRequestHeader(key, value)
-	*t.requestHeaders += key + ": " + value + "\n"
+	t.httpPayload.RequestHeaders = append(t.httpPayload.RequestHeaders, pm.HTTPHeader{Key: key, Value: value})
+	// *t.requestHeaders += key + ": " + value + "\n"
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 
@@ -195,11 +210,12 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 				requestHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeModels = ParseActiveModels(requestHeadersExceptionRuleMessage)
 
-				if cf.Get().LogLevel == lg.DEBUG {
-					for _, model := range activeModels {
-						t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
-					}
+				// TODO: review logger
+				// if cf.Get().LogLevel == lg.DEBUG {
+				for _, model := range activeModels {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
 				}
+				// }
 			}
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.reqHeadModelIDs
@@ -212,7 +228,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "1")))
 		}
 
-		err = wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders, activeModels)
+		err = wace.Analyze("RequestHeaders", t.Transaction.ID(), *t.httpPayload, activeModels)
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request headers by WACE: "+err.Error())
 		}
@@ -221,7 +237,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 
 	interruption := t.Transaction.ProcessRequestHeaders()
 	if interruption != nil {
-		*t.responseStatusCode = interruption.Status
+		t.httpPayload.ResponseCode = interruption.Status
 	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
@@ -243,7 +259,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			if res {
 				t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 				interruption = &types.Interruption{Action: "deny"}
-				*t.responseStatusCode = 403
+				t.httpPayload.ResponseCode = 403
 
 				blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
 				if err != nil {
@@ -268,7 +284,7 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 	if err1 != nil {
 		return nil, 0, err1
 	}
-	*t.requestBody = string(b)
+	t.httpPayload.RequestBody = string(b)
 
 	interruption, _, err2 := t.exceptionTransaction.ReadRequestBodyFrom(&buf)
 
@@ -285,7 +301,7 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 
 	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
 
-	t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Request body read "+*t.requestBody)
+	t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Request body read "+t.httpPayload.RequestBody)
 	return interruption2, cantB2, err
 }
 
@@ -314,11 +330,11 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				requestExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeRequestModels = ParseActiveModels(requestExceptionRuleMessage)
 
-				if cf.Get().LogLevel == lg.DEBUG {
-					for _, model := range activeRequestModels {
-						t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
-					}
+				// if cf.Get().LogLevel == lg.DEBUG {
+				for _, model := range activeRequestModels {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
 				}
+				// }
 			}
 
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestBody"] {
@@ -328,11 +344,11 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				requestBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeRequestBodyModels = ParseActiveModels(requestBodyExceptionRuleMessage)
 
-				if cf.Get().LogLevel == lg.DEBUG { 
-					for _, model := range activeRequestBodyModels {
-						t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
-					}
+				// if cf.Get().LogLevel == lg.DEBUG {
+				for _, model := range activeRequestBodyModels {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
 				}
+				// }
 			}
 		} else {
 			activeRequestBodyModels = t.waf.waceWafConfig.waceModels.reqBodyModelIDs
@@ -347,7 +363,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing request body by WACE and Coraza")
 
-			err := wace.Analyze("RequestBody", t.Transaction.ID(), *t.requestBody, activeRequestBodyModels)
+			err := wace.Analyze("RequestBody", t.Transaction.ID(), pm.HTTPPayload{RequestBody: t.httpPayload.RequestBody}, activeRequestBodyModels)
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request body by WACE: "+err.Error())
 			}
@@ -356,7 +372,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing request by WACE and Coraza")
 
-			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.requestLine+"\n"+*t.requestHeaders+"\n"+*t.requestBody, activeRequestModels)
+			err := wace.Analyze("AllRequest", t.Transaction.ID(), *t.httpPayload, activeRequestModels)
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request by WACE: "+err.Error())
 			}
@@ -369,7 +385,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request body by Coraza: "+err.Error())
 	}
 	if interruption != nil {
-		*t.responseStatusCode = interruption.Status
+		t.httpPayload.ResponseCode = interruption.Status
 	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
@@ -396,7 +412,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 			interruption = &types.Interruption{Action: "deny"}
-			*t.responseStatusCode = 403
+			t.httpPayload.ResponseCode = 403
 
 			blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
 			if err2 != nil {
@@ -417,7 +433,8 @@ func (t WaceTransaction) AddResponseHeader(key string, value string) {
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.exceptionTransaction.AddResponseHeader(key, value)
-	*t.responseHeaders += key + ": " + value + "\n"
+	t.httpPayload.ResponseHeaders = append(t.httpPayload.ResponseHeaders, pm.HTTPHeader{Key: key, Value: value})
+	// *t.responseHeaders += key + ": " + value + "\n"
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 
@@ -428,8 +445,10 @@ func (t WaceTransaction) AddResponseHeader(key string, value string) {
 func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.Interruption {
 	start := time.Now()
 
-	*t.responseStatusCode = code
-	*t.responseLine = proto + " " + fmt.Sprint(code)
+	t.httpPayload.ResponseCode = code
+	t.httpPayload.ResponseProtocol = proto
+	// *t.responseLine = proto + " " + fmt.Sprint(code)
+	t.coordinator.Add(1)
 	go func() {
 		t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing response headers by WACE and Coraza")
 
@@ -449,11 +468,11 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 				responseHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeModels = ParseActiveModels(responseHeadersExceptionRuleMessage)
 
-				if cf.Get().LogLevel == lg.DEBUG {
-					for _, model := range activeModels {
-						t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
-					}
+				// if cf.Get().LogLevel == lg.DEBUG {
+				for _, model := range activeModels {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
 				}
+				// }
 			}
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels.respHeadModelIDs
@@ -466,11 +485,12 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "3")))
 		}
 
-		err = wace.Analyze("ResponseHeaders", t.Transaction.ID(), *t.responseLine+"\n"+*t.responseHeaders, activeModels)
+		err = wace.Analyze("ResponseHeaders", t.Transaction.ID(), pm.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders}, activeModels)
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing response headers by WACE: "+err.Error())
 		}
 
+		t.coordinator.Done()
 	}()
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
@@ -513,7 +533,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 // WriteResponseBody implements the WriteResponseBody interface provided by Coraza WAF to write the response body by WACE and Coraza
 func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, error) {
 	startTime := time.Now()
-	*t.responseBody = string(b)
+	t.httpPayload.ResponseBody = string(b)
 
 	interruption, cantB, err := t.exceptionTransaction.WriteResponseBody(b)
 
@@ -537,6 +557,7 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 // ProcessResponseBody implements the ProcessResponseBody interface provided by Coraza WAF to process the response body by WACE and Coraza
 func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	start := time.Now()
+	t.coordinator.Add(2)
 	go func() {
 
 		var activeResponseBodyModels []string
@@ -557,11 +578,11 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 				responseExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeResponseModels = ParseActiveModels(responseExceptionRuleMessage)
 
-				if cf.Get().LogLevel == lg.DEBUG {
-					for _, model := range activeResponseModels {
-						t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
-					}
+				// if cf.Get().LogLevel == lg.DEBUG {
+				for _, model := range activeResponseModels {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
 				}
+				// }
 			}
 
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseBody"] {
@@ -571,11 +592,11 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 				responseBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
 				activeResponseBodyModels = ParseActiveModels(responseBodyExceptionRuleMessage)
 
-				if cf.Get().LogLevel == lg.DEBUG {
-					for _, model := range activeResponseBodyModels {
-						t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
-					}
+				// if cf.Get().LogLevel == lg.DEBUG {
+				for _, model := range activeResponseBodyModels {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Active model: "+model)
 				}
+				// }
 			}
 		} else {
 			activeResponseBodyModels = t.waf.waceWafConfig.waceModels.respBodyModelIDs
@@ -592,18 +613,20 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing response body by WACE and Coraza")
 
-			err := wace.Analyze("ResponseBody", t.Transaction.ID(), *t.responseBody, activeResponseBodyModels)
+			err := wace.Analyze("ResponseBody", t.Transaction.ID(), pm.HTTPPayload{ResponseBody: t.httpPayload.ResponseBody}, activeResponseBodyModels)
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing response body by WACE: "+err.Error())
 			}
+			t.coordinator.Done()
 		}()
 		go func() {
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Processing response by WACE and Coraza")
 
-			err := wace.Analyze("AllResponse", t.Transaction.ID(), *t.requestBody, activeResponseModels)
+			err := wace.Analyze("AllResponse", t.Transaction.ID(), pm.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders, ResponseBody: t.httpPayload.ResponseBody}, activeResponseModels)
 			if err != nil {
 				t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing response by WACE: "+err.Error())
 			}
+			t.coordinator.Done()
 		}()
 	}()
 
@@ -620,6 +643,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	}
 	wafParams["phase"] = "4"
 
+	t.coordinator.Wait()
 	res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 	if err2 == nil {
@@ -670,7 +694,7 @@ func (t WaceTransaction) ProcessLogging() {
 		if err != nil {
 			t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error getting processed counter: "+err.Error())
 		} else {
-			processed.Add(ctx, 1, metric.WithAttributes(semconv.HTTPResponseStatusCode(*t.responseStatusCode)))
+			processed.Add(ctx, 1, metric.WithAttributes(semconv.HTTPResponseStatusCode(t.httpPayload.ResponseCode)))
 			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Request processed")
 		}
 

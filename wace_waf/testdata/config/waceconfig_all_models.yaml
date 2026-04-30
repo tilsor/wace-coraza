@@ -10,38 +10,38 @@ loglevel: "DEBUG"
 modelplugins:
   - id: "trivialRequestHeaders"
     plugintype: RequestHeaders
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.1
     mode: sync
   - id: "trivialRequestBody"
     plugintype: RequestBody
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.1
     mode: sync
   - id: "trivialAllRequest"
     plugintype: AllRequest
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.1
     mode: sync
   - id: "trivialResponseHeaders"
     plugintype: ResponseHeaders
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.1
     mode: sync
   - id: "trivialResponseBody"
     plugintype: ResponseBody
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.1
     mode: sync
   - id: "trivialAllResponse"
     plugintype: AllResponse
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.1
     mode: sync
 
 decisionplugins:
   - id: "weighted_sum"
-    path: "testdata/weighted_sum.so"
+    path: "testdata/plugins/weighted_sum.so"
     params:
       waf_weight: "0.5"
       threshold: "0.5"
