@@ -1,8 +1,10 @@
 package waceWAF
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -11,7 +13,7 @@ import (
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/debuglog"
 	"github.com/corazawaf/coraza/v3/types"
-	cf "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core/configstore"
+	cf "github.com/tilsor/ModSecIntl_wace_lib/configstore"
 )
 
 // generalConfig is the struct that holds the general configuration of the WAF
@@ -45,11 +47,11 @@ type WaceModels struct {
 	respModelIDs     []string
 }
 
-// WaceGeneralConfigFileData holds the general configuration data from the config file
-type WaceGeneralConfigFileData struct {
+// waceGeneralConfigFileData holds the general configuration data from the config file
+type waceGeneralConfigFileData struct {
 	cf.ConfigFileData    `yaml:",inline"`
 	Options              map[string]string `yaml:"options"`
-	RuleIdsForExceptions map[string]int `yaml:"ruleidsforexceptions"`
+	RuleIdsForExceptions map[string]int    `yaml:"ruleidsforexceptions"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
@@ -60,23 +62,19 @@ type WaceAppConfigFileData struct {
 }
 
 // LoadConfig loads the general configuration from the config file to memory
-func (g *generalConfig) LoadConfig(configFilePath string) error {
-	var file, err = os.ReadFile(configFilePath)
+func (g *generalConfig) LoadConfig(configFilePath string) (waceGeneralConfigFileData, error) {
+	data, err := os.ReadFile(configFilePath)
 	if err != nil {
-		return err
+		return waceGeneralConfigFileData{}, err
 	}
-	return g.LoadGeneralConfigYaml(file)
-}
 
-// LoadGeneralConfigYaml loads the general configuration from the config file to memory
-func (g *generalConfig) LoadGeneralConfigYaml(config []byte) error {
-	var inConf WaceGeneralConfigFileData
+	var confData waceGeneralConfigFileData
 
-	err := yaml.Unmarshal(config, &inConf)
+	err = yaml.Unmarshal(data, &confData)
 	if err != nil {
-		return err
+		return waceGeneralConfigFileData{}, err
 	}
-	for key, value := range inConf.Options {
+	for key, value := range confData.Options {
 		if key == "early_blocking" {
 			g.earlyBlocking = value == "true"
 		} else if key == "crs_version" {
@@ -88,37 +86,38 @@ func (g *generalConfig) LoadGeneralConfigYaml(config []byte) error {
 	if g.ruleIdsForExceptions == nil {
 		g.ruleIdsForExceptions = make(map[string]int)
 	}
-	for key, value := range inConf.RuleIdsForExceptions {
+	for key, value := range confData.RuleIdsForExceptions {
 		g.ruleIdsForExceptions[key] = value
 	}
 
-	err = cf.Get().SetConfig(inConf.ConfigFileData)
-
-	g.waceModels = NewWaceDefaultModelsConfig()
-	for _, decision := range inConf.Decisionplugins {
-		g.waceDecisions = append(g.waceDecisions, decision.ID)
-	}
-
-	return err
+	return confData, err
 }
 
 // LoadConfigYaml loads the application configuration from the config file to memory
 func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
-	var inConf WaceAppConfigFileData
+	var conf WaceAppConfigFileData
 
-	err := yaml.Unmarshal(config, &inConf)
+	err := yaml.Unmarshal(config, &conf)
 	if err != nil {
 		return err
 	}
-	for key, value := range inConf.Options {
+	for key, value := range conf.Options {
 		if key == "early_blocking" {
 			w.earlyBlocking = value == "true"
 		}
 	}
 
-	w.waceModels = NewWaceModelsConfig(inConf.ModelIds)
-	w.waceDecisionId = inConf.DecisionId
-	return err
+	w.waceModels, err = NewWaceModelsConfig(conf.ModelIds)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(gConfig.waceDecisions, conf.DecisionId) {
+		w.waceDecisionId = conf.DecisionId
+	} else {
+		return fmt.Errorf("Decision id %s does not exist in general configuration file or it wasn't loaded properly", conf.DecisionId)
+	}
+
+	return nil
 }
 
 // LoadConfig loads the configuration from the config file to memory
@@ -139,60 +138,96 @@ func (w *waceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.waceDecisionId = g.waceDecisions[0]
 }
 
-// NewWaceDefaultModelsConfig creates the default WaceModels with the models stored in the WACE ConfigStore
-func NewWaceDefaultModelsConfig() *WaceModels {
-	conf := cf.Get()
-	reqHeadModelIDs := []string{}
-	reqBodyModelIDs := []string{}
-	reqModelIDs := []string{}
-	respHeadModelIDs := []string{}
-	respBodyModelIDs := []string{}
-	respModelIDs := []string{}
-	for _, model := range conf.ModelPlugins {
-		if model.PluginType.String() == "RequestHeaders" {
-			reqHeadModelIDs = append(reqHeadModelIDs, model.ID)
-		} else if model.PluginType.String() == "RequestBody" {
-			reqBodyModelIDs = append(reqBodyModelIDs, model.ID)
-		} else if model.PluginType.String() == "AllRequest" {
-			reqModelIDs = append(reqModelIDs, model.ID)
-		} else if model.PluginType.String() == "ResponseHeaders" {
-			respHeadModelIDs = append(respHeadModelIDs, model.ID)
-		} else if model.PluginType.String() == "ResponseBody" {
-			respBodyModelIDs = append(respBodyModelIDs, model.ID)
-		} else if model.PluginType.String() == "AllResponse" {
-			respModelIDs = append(respModelIDs, model.ID)
+// getDefaultPlugins gets the list of plugin IDs from WACE ConfigStore after they were validated
+func getDefaultPlugins() (*WaceModels, map[string]struct{}, error) {
+	cs, err := cf.Get()
+	if err != nil {
+		return &WaceModels{}, nil, err
+	}
+	models := &WaceModels{}
+	models.reqHeadModelIDs = []string{}
+	models.reqBodyModelIDs = []string{}
+	models.reqModelIDs = []string{}
+	models.respHeadModelIDs = []string{}
+	models.respBodyModelIDs = []string{}
+	models.respModelIDs = []string{}
+	for _, model := range cs.ModelPlugins {
+		switch model.PluginType {
+		case cf.RequestHeaders:
+			models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
+		case cf.RequestBody:
+			models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
+		case cf.AllRequest:
+			models.reqModelIDs = append(models.reqModelIDs, model.ID)
+		case cf.ResponseHeaders:
+			models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
+		case cf.ResponseBody:
+			models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
+		case cf.AllResponse:
+			models.respModelIDs = append(models.respModelIDs, model.ID)
 		}
 	}
-	return &WaceModels{reqHeadModelIDs, reqBodyModelIDs, reqModelIDs, respHeadModelIDs, respBodyModelIDs, respModelIDs}
+
+	decisionIDs := make(map[string]struct{})
+	for id, _ := range cs.DecisionPlugins {
+		decisionIDs[id] = struct{}{}
+	}
+
+	return models, decisionIDs, nil
 }
 
-// NewWaceModelsConfig creates a new WaceModels with the models with the given ids 
-// using the models stored in the WACE ConfigStore
-func NewWaceModelsConfig(modelsIds []string) *WaceModels {
-	conf := cf.Get()
-	reqHeadModelIDs := []string{}
-	reqBodyModelIDs := []string{}
-	reqModelIDs := []string{}
-	respHeadModelIDs := []string{}
-	respBodyModelIDs := []string{}
-	respModelIDs := []string{}
-	for _, modelId := range modelsIds {
-		model := conf.ModelPlugins[modelId]
-		if model.PluginType.String() == "RequestHeaders" {
-			reqHeadModelIDs = append(reqHeadModelIDs, model.ID)
-		} else if model.PluginType.String() == "RequestBody" {
-			reqBodyModelIDs = append(reqBodyModelIDs, model.ID)
-		} else if model.PluginType.String() == "AllRequest" {
-			reqModelIDs = append(reqModelIDs, model.ID)
-		} else if model.PluginType.String() == "ResponseHeaders" {
-			respHeadModelIDs = append(respHeadModelIDs, model.ID)
-		} else if model.PluginType.String() == "ResponseBody" {
-			respBodyModelIDs = append(respBodyModelIDs, model.ID)
-		} else if model.PluginType.String() == "AllResponse" {
-			respModelIDs = append(respModelIDs, model.ID)
+func (g *generalConfig) setDefaultPlugins(loadedConf waceGeneralConfigFileData) error {
+	models, decisions, err := getDefaultPlugins()
+	if err != nil {
+		return err
+	}
+
+	g.waceModels = models
+
+	if len(decisions) == 0 {
+		return fmt.Errorf("There are no decision plugins available")
+	}
+
+	for _, decisionPlugin := range loadedConf.Decisionplugins {
+		if _, ok := decisions[decisionPlugin.ID]; ok {
+			g.waceDecisions = append(g.waceDecisions, decisionPlugin.ID)
 		}
 	}
-	return &WaceModels{reqHeadModelIDs, reqBodyModelIDs, reqModelIDs, respHeadModelIDs, respBodyModelIDs, respModelIDs}
+
+	return nil
+}
+
+// NewWaceModelsConfig creates a new WaceModels with the models with the given ids
+// using the models stored in the WACE ConfigStore
+func NewWaceModelsConfig(modelsIds []string) (*WaceModels, error) {
+	cs, err := cf.Get()
+	if err != nil {
+		return &WaceModels{}, err
+	}
+	models := &WaceModels{}
+	models.reqHeadModelIDs = []string{}
+	models.reqBodyModelIDs = []string{}
+	models.reqModelIDs = []string{}
+	models.respHeadModelIDs = []string{}
+	models.respBodyModelIDs = []string{}
+	models.respModelIDs = []string{}
+	for _, model := range cs.ModelPlugins {
+		switch model.PluginType {
+		case cf.RequestHeaders:
+			models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
+		case cf.RequestBody:
+			models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
+		case cf.AllRequest:
+			models.reqModelIDs = append(models.reqModelIDs, model.ID)
+		case cf.ResponseHeaders:
+			models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
+		case cf.ResponseBody:
+			models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
+		case cf.AllResponse:
+			models.respModelIDs = append(models.respModelIDs, model.ID)
+		}
+	}
+	return models, nil
 }
 
 // getConfigRules returns the rules that are specific to the CRS version

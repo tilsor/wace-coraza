@@ -10,18 +10,18 @@ loglevel: "WARN"
 modelplugins:
   - id: "trivial"
     plugintype: RequestHeaders
-    path: "testdata/trivial.so"
+    path: "testdata/plugins/trivial.so"
     weight: 0.25
     mode: sync
   - id: "trivial2"
-    plugintype: RequestHeaders
-    path: "testdata/trivial2.so"
+    plugintype: RequestBody
+    path: "testdata/plugins/trivial2.so"
     weight: 0.25
     mode: sync
 
 decisionplugins:
   - id: "weighted_sum"
-    path: "testdata/weighted_sum.so"
+    path: "testdata/plugins/weighted_sum.so"
     params:
       waf_weight: "0.5"
       threshold: "0.5"

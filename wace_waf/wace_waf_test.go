@@ -1,35 +1,41 @@
 package waceWAF
 
 import (
-	// "strings"
-	"os"
+	"reflect"
 	"strings"
 	"testing"
 
-	coraza "github.com/corazawaf/coraza/v3"
-	wace "gitlab.fing.edu.uy/gsi/pgrado-wace/ModSecIntl_wace_core"
+	"github.com/corazawaf/coraza/v3"
+	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
+	"github.com/tilsor/ModSecIntl_wace_lib/pluginmanager"
 )
 
 func TestNewWaf(t *testing.T) {
-	file, err := os.ReadFile("testdata/waceconfig.yaml")
-	if err != nil {
-		t.Errorf("Error reading config file: %v", err.Error())
-	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
-	InitMetrics(ctx, gConfig.otelURL)
-	wace.Init(getWaceMeter())
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
 	wafConfig := NewWAFConfig()
-	_, err = NewWAF(wafConfig)
+	_, err := NewWAF(wafConfig)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 }
 
 func TestTransactionAddData(t *testing.T) {
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/directives.conf")
-	waceWafConf := wafConf.(*waceWAFConfig)
-	waceWafConf.LoadConfigFromGeneralConfig(*gConfig)
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+
 	waf, err := NewWAF(wafConf)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
@@ -61,37 +67,31 @@ func TestTransactionAddData(t *testing.T) {
 	if !ok {
 		t.Errorf("Error casting to WaceTransaction")
 	}
-	expectedRequestLine := "GET http://localhost:8090 HTTP/1.1"
-	gotRequestLine := *txW.requestLine
-	if expectedRequestLine != gotRequestLine {
-		t.Errorf("Error processing URI: Expected: %s, Got: %s", expectedRequestLine, gotRequestLine)
+	expectedPayload := pluginmanager.HTTPPayload{
+		URI:             "http://localhost:8090",
+		Method:          "GET",
+		HTTPVersion:     "HTTP/1.1",
+		RequestHeaders:  []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		RequestBody:     "test",
+		ResponseHeaders: []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		ResponseBody:    "test",
 	}
-	expectedRequestHeaders := "content-type: application/x-www-form-urlencoded\n"
-	gotRequestHeaders := *txW.requestHeaders
-	if expectedRequestHeaders != gotRequestHeaders {
-		t.Errorf("Error adding request header: Expected: %s, Got: %s", expectedRequestHeaders, gotRequestHeaders)
-	}
-	expectedRequestBody := "test"
-	gotRequestBody := *txW.requestBody
-	if expectedRequestBody != gotRequestBody {
-		t.Errorf("Error reading request body: Expected: %s, Got: %s", expectedRequestBody, gotRequestBody)
-	}
-	expectedResponseHeaders := "content-type: application/x-www-form-urlencoded\n"
-	gotResponseHeaders := *txW.responseHeaders
-	if expectedResponseHeaders != gotResponseHeaders {
-		t.Errorf("Error adding response header: Expected: %s, Got: %s", expectedResponseHeaders, gotResponseHeaders)
-	}
-	expectedResponseBody := "test"
-	gotResponseBody := *txW.responseBody
-	if expectedResponseBody != gotResponseBody {
-		t.Errorf("Error writing response body: Expected: %s, Got: %s", expectedResponseBody, gotResponseBody)
+	if !reflect.DeepEqual(*txW.httpPayload, expectedPayload) {
+		t.Errorf("Error processing http payload: Expected: %v, Got: %v", expectedPayload, *txW.httpPayload)
 	}
 }
 
 func TestTransactionProcess(t *testing.T) {
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/directives.conf")
-	waceWafConf := wafConf.(*waceWAFConfig)
-	waceWafConf.LoadConfigFromGeneralConfig(*gConfig)
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+
 	waf, err := NewWAF(wafConf)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
@@ -102,7 +102,6 @@ func TestTransactionProcess(t *testing.T) {
 	}
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
-	tx.SetServerName("Apache")
 	i := tx.ProcessRequestHeaders()
 	if i != nil {
 		t.Errorf("Error processing request headers that should not be blocked")
@@ -152,18 +151,18 @@ func TestTransactionProcess(t *testing.T) {
 }
 
 func TestBlockTransactions(t *testing.T) {
-	file, err := os.ReadFile("testdata/waceconfig_block_transaction.yaml")
-	if err != nil {
-		t.Errorf("Error reading config file: %v", err.Error())
-	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
-	InitMetrics(ctx, gConfig.otelURL)
-	wace.Init(getWaceMeter())
-	wafConfig := NewWAFConfig()
-	wafConfig = wafConfig.WithDirectivesFromFile("testdata/directives.conf").
-	WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
-	waf, err := NewWAF(wafConfig)
+	configFilePath = "testdata/config/waceconfig_block_transaction.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
+
+	waf, err := NewWAF(wafConf)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
@@ -225,18 +224,17 @@ func TestBlockTransactions(t *testing.T) {
 }
 
 func TestExceptions(t *testing.T) {
-	file, err := os.ReadFile("testdata/waceconfig_all_models.yaml")
-	if err != nil {
-		t.Errorf("Error reading config file: %v", err.Error())
-	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
-	InitMetrics(ctx, gConfig.otelURL)
-	wace.Init(getWaceMeter())
-	wafConfig := NewWAFConfig()
-	wafConfig = wafConfig.WithDirectivesFromFile("testdata/directives.conf").WithDirectivesFromFile("testdata/waceexceptions.conf")
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
+	gConfig = nil
 
-	waf, err := NewWAF(wafConfig)
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").WithDirectivesFromFile("testdata/config/waceexceptions.conf")
+
+	waf, err := NewWAF(wafConf)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
@@ -287,26 +285,28 @@ func TestExceptions(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error processing response body: %v", err.Error())
 	}
+
+	tx.ProcessLogging()
 }
 
-
 func BenchmarkWaceTransactions(b *testing.B) {
-	file, err := os.ReadFile("testdata/waceconfig.yaml")
-	if err != nil {
-		b.Errorf("Error reading config file: %v", err.Error())
-	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
-	InitMetrics(ctx, gConfig.otelURL)
-	wace.Init(getWaceMeter())
-	wafConfig := NewWAFConfig()
-	wafConfig = wafConfig.WithDirectivesFromFile("../coraza.conf").
-	WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-	WithDirectivesFromFile("../coreruleset/rules/*.conf")
-	waf, err := NewWAF(wafConfig)
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
 	if err != nil {
 		b.Errorf("Error creating WAF: %v", err.Error())
 	}
+
 	for i := 0; i < b.N; i++ {
 		tx := waf.NewTransaction()
 		if tx == nil {
@@ -329,22 +329,23 @@ func BenchmarkWaceTransactions(b *testing.B) {
 }
 
 func BenchmarkWaceTransactionsNATS(b *testing.B) {
-	file, err := os.ReadFile("testdata/waceconfig_nats.yaml")
-	if err != nil {
-		b.Errorf("Error reading config file: %v", err.Error())
-	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
-	InitMetrics(ctx, gConfig.otelURL)
-	wace.Init(getWaceMeter())
-	wafConfig := NewWAFConfig()
-	wafConfig = wafConfig.WithDirectivesFromFile("../coraza.conf").
-	WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-	WithDirectivesFromFile("../coreruleset/rules/*.conf")
-	waf, err := NewWAF(wafConfig)
+	configFilePath = "testdata/config/waceconfig_nats.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
 	if err != nil {
 		b.Errorf("Error creating WAF: %v", err.Error())
 	}
+
 	for i := 0; i < b.N; i++ {
 		tx := waf.NewTransaction()
 		if tx == nil {
@@ -366,11 +367,11 @@ func BenchmarkWaceTransactionsNATS(b *testing.B) {
 	}
 }
 
-func BenchmarkCorazaTransactions(b *testing.B){
+func BenchmarkCorazaTransactions(b *testing.B) {
 	wafConfig := coraza.NewWAFConfig()
 	wafConfig = wafConfig.WithDirectivesFromFile("../coraza.conf").
-	WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-	WithDirectivesFromFile("../coreruleset/rules/*.conf")
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 	waf, err := coraza.NewWAF(wafConfig)
 	if err != nil {
 		b.Errorf("Error creating WAF: %v", err.Error())

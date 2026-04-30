@@ -1,9 +1,10 @@
 package waceWAF
 
 import (
-	"os"
 	"reflect"
 	"testing"
+
+	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 )
 
 func TestGetConfigRules(t *testing.T) {
@@ -67,13 +68,15 @@ func TestGetConfigRules(t *testing.T) {
 	}
 }
 
-func TestNewWaceConfig(t *testing.T) {
-	file, err := os.ReadFile("testdata/waceconfig.yaml")
-	if err != nil {
-		t.Errorf("Error reading config file: %v", err)
-	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
+func TestNewConfig(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
 	wafConfig := NewWAFConfig()
 	waf, err := NewWAF(wafConfig)
 	if err != nil {
@@ -83,11 +86,18 @@ func TestNewWaceConfig(t *testing.T) {
 	if conf == nil {
 		t.Errorf("Error creating WaceConfig")
 	}
-	if len(conf.reqHeadModelIDs) == 0 {
-		t.Errorf("Error creating WaceConfig: reqHeadModelIDs is empty")
+
+	expected := &WaceModels{
+		reqHeadModelIDs:  []string{"trivial"},
+		reqBodyModelIDs:  []string{"trivial2"},
+		reqModelIDs:      []string{},
+		respHeadModelIDs: []string{},
+		respBodyModelIDs: []string{},
+		respModelIDs:     []string{},
 	}
-	if conf.reqHeadModelIDs[0] != "trivial" && conf.reqHeadModelIDs[1] != "trivial" {
-		t.Errorf("Error creating WaceConfig: first model is not 'trivial'")
+
+	if !reflect.DeepEqual(gConfig.waceModels, expected) {
+		t.Errorf("Error: models do not match expected %v, got %v", expected, conf)
 	}
 }
 
@@ -107,9 +117,9 @@ func TestParseUnexceptedModels(t *testing.T) {
 
 func TestGeneralConfigLoadConfig(t *testing.T) {
 	gConfig := generalConfig{}
-	configFilePath := "testdata/waceconfig.yaml"
+	configFilePath := "testdata/config/waceconfig.yaml"
 
-	err := gConfig.LoadConfig(configFilePath)
+	_, err := gConfig.LoadConfig(configFilePath)
 	if err != nil {
 		t.Fatalf("Error loading general config: %v", err)
 	}
@@ -122,10 +132,24 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 
 // Ejemplo de prueba para waceWAFConfig.LoadConfig
 func TestWaceWAFConfigLoadConfig(t *testing.T) {
-	wConfig := waceWAFConfig{}
-	configFilePath := "testdata/app1waceappconfig.yaml"
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
 
-	err := wConfig.LoadConfig(configFilePath)
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWAFConfig()
+	_, err := NewWAF(wafConfig)
+	if err != nil {
+		t.Errorf("Error creating WAF: %v", err)
+	}
+
+	wConfig := waceWAFConfig{}
+	filePath := "testdata/config/app1waceappconfig.yaml"
+
+	err = wConfig.LoadConfig(filePath)
 	if err != nil {
 		t.Fatalf("Error loading waceappconfig: %v", err)
 	}
@@ -140,13 +164,19 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 }
 
 func TestNewWaceDefaultModelsConfig(t *testing.T) {
-	file, err := os.ReadFile("testdata/waceconfig_all_models.yaml")
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWAFConfig()
+	_, err := NewWAF(wafConfig)
 	if err != nil {
-		t.Errorf("Error reading config file: %v", err.Error())
+		t.Errorf("Error loading config: %s", err.Error())
 	}
-	gConfig = new(generalConfig)
-	gConfig.LoadGeneralConfigYaml(file)
-	defaultResults := NewWaceDefaultModelsConfig()
 
 	expected := &WaceModels{
 		reqHeadModelIDs:  []string{"trivialRequestHeaders"},
@@ -157,8 +187,8 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		respModelIDs:     []string{"trivialAllResponse"},
 	}
 
-	if !reflect.DeepEqual(defaultResults, expected) {
-		t.Errorf("Error: models do not match expected %v, got %v", expected, defaultResults)
+	if !reflect.DeepEqual(gConfig.waceModels, expected) {
+		t.Errorf("Error: models do not match expected %v, got %v", expected, gConfig.waceModels)
 	}
 
 	models := []string{
@@ -169,7 +199,11 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		"trivialResponseBody",
 		"trivialAllResponse",
 	}
-	results := NewWaceModelsConfig(models)
+	results, err := NewWaceModelsConfig(models)
+
+	if err != nil {
+		t.Errorf("Error creating new models config: %s", err.Error())
+	}
 
 	if !reflect.DeepEqual(results, expected) {
 		t.Errorf("Error: models do not match expected %v, got %v", expected, results)
@@ -181,7 +215,7 @@ func TestConfigInterface(t *testing.T) {
 	if config == nil {
 		t.Errorf("Error creating WAFConfig")
 	}
-	config = config.WithDirectivesFromFile("testdata/directives.conf").
+	config = config.WithDirectivesFromFile("testdata/config/directives.conf").
 		WithRequestBodyAccess().
 		WithResponseBodyAccess().
 		WithRequestBodyInMemoryLimit(2000).
