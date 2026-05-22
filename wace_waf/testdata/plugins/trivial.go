@@ -7,7 +7,7 @@ import (
 	"context"
 
 	lg "github.com/tilsor/ModSecIntl_logging/logging"
-	pm "github.com/tilsor/ModSecIntl_wace_lib/pluginmanager"
+	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -26,18 +26,26 @@ func InitPlugin(params map[string]string, meter metric.Meter) error {
 	return nil
 }
 
-func InitPluginAsync(params map[string]string, meter metric.Meter, natsManager func(func(pm.ModelInput) (pm.ModelResults, error))) error {
+func InitPluginAsync(params map[string]string, meter metric.Meter, natsManager func(func(waceapi.ModelInput) (waceapi.ModelResults, error))) error {
 	InitPlugin(params, meter)
 	natsManager(Process)
 	return nil
 }
 
-func Process(input pm.ModelInput) (pm.ModelResults, error) {
+func Process(input waceapi.ModelInput) (waceapi.ModelResults, error) {
 	logger := lg.Get()
-	logger.TPrintf(lg.WARN, input.TransactionId, "[trivial:Process] \"%s\"\n", input.Payload)
-	result := pm.ModelResults{
+	logger.TPrintf(lg.WARN, input.TransactionId, "[trivial:Process] \"%v\"\n", input.Payload)
+	result := waceapi.ModelResults{
 		ProbAttack: 0.0,
-		Data:       make(map[string]interface{}),
+		Data:       input,
+		// Data:       make(map[string]interface{}),
 	}
 	return result, nil
+}
+
+// ReloadPlugin reload the plugin (does nothing in this case)
+func ReloadPlugin(params map[string]string, meter metric.Meter) error {
+	logger := lg.Get()
+	logger.Printf(lg.WARN, "[trivial:ReloadPlugin] %v\n", params)
+	return nil
 }

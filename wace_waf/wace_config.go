@@ -1,6 +1,7 @@
 package waceWAF
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"os"
@@ -24,6 +25,7 @@ type generalConfig struct {
 	earlyBlocking        bool
 	crsVersion           string
 	ruleIdsForExceptions map[string]int
+	hash                 string
 }
 
 // waceWAFConfig implements the WAFConfig interface and adds the specific configuration for the WaceWAF
@@ -61,16 +63,17 @@ type WaceAppConfigFileData struct {
 	Options    map[string]string
 }
 
-// LoadConfig loads the general configuration from the config file to memory
-func (g *generalConfig) LoadConfig(configFilePath string) (waceGeneralConfigFileData, error) {
-	data, err := os.ReadFile(configFilePath)
-	if err != nil {
-		return waceGeneralConfigFileData{}, err
-	}
+func dataHash(data []byte) string {
+	h := sha256.New()
+	h.Write(data)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
 
+// LoadConfig loads the general configuration from the config file to memory
+func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, error) {
 	var confData waceGeneralConfigFileData
 
-	err = yaml.Unmarshal(data, &confData)
+	err := yaml.Unmarshal(config, &confData)
 	if err != nil {
 		return waceGeneralConfigFileData{}, err
 	}
@@ -169,7 +172,7 @@ func getDefaultPlugins() (*WaceModels, map[string]struct{}, error) {
 	}
 
 	decisionIDs := make(map[string]struct{})
-	for id, _ := range cs.DecisionPlugins {
+	for id := range cs.DecisionPlugins {
 		decisionIDs[id] = struct{}{}
 	}
 

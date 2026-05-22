@@ -1,23 +1,24 @@
-#WACE configuration file
+#WACE configuration file - trivial2 (attack=1.0) in training mode
+# Used to verify training models are excluded from the decision plugin.
+# trivial2 would cause a block in sync mode (see TestBlockTransactions),
+# but must not affect the decision when in training mode.
 
-# WACE general configuration
-#The full path to the wace log file
 logpath: "/dev/null"
-#The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
 loglevel: "DEBUG"
 
-#The model plugins configuration
 modelplugins:
   - id: "trivial"
     plugintype: RequestHeaders
     path: "testdata/plugins/trivial.so"
     weight: 0
-    mode: sync
   - id: "trivial2"
     plugintype: RequestHeaders
     path: "testdata/plugins/trivial2.so"
     weight: 1
-    mode: sync
+    training: true
+    training_data:
+      max_samples: 10
+      result_file_path: "/tmp/training_results.json"
 
 decisionplugins:
   - id: "weighted_sum"
@@ -27,7 +28,6 @@ decisionplugins:
       threshold: "0.1"
 
 options:
-  otelurl: "localhost:4317"
   crs_version: "4.4.0-dev"
   early_blocking: "true"
 

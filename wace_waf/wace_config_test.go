@@ -1,6 +1,7 @@
 package waceWAF
 
 import (
+	"os"
 	"reflect"
 	"testing"
 
@@ -119,7 +120,11 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 	gConfig := generalConfig{}
 	configFilePath := "testdata/config/waceconfig.yaml"
 
-	_, err := gConfig.LoadConfig(configFilePath)
+	data, err := os.ReadFile(configFilePath)
+	if err != nil {
+		t.Fatalf("Error loading general config: %v", err)
+	}
+	_, err = gConfig.LoadConfig(data)
 	if err != nil {
 		t.Fatalf("Error loading general config: %v", err)
 	}
@@ -207,6 +212,107 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 
 	if !reflect.DeepEqual(results, expected) {
 		t.Errorf("Error: models do not match expected %v, got %v", expected, results)
+	}
+}
+
+func TestGeneralConfigLoadConfigTrainingFields(t *testing.T) {
+	gCfg := generalConfig{}
+	config := []byte(`
+logpath: "/dev/null"
+loglevel: "WARN"
+modelplugins:
+  - id: "model_training"
+    plugintype: RequestHeaders
+    path: "testdata/plugins/trivial.so"
+    weight: 0.25
+    training: true
+    training_data:
+      max_samples: 50
+      result_file_path: "/tmp/training_results.json"
+decisionplugins:
+  - id: "weighted_sum"
+    path: "testdata/plugins/weighted_sum.so"
+options:
+  crs_version: "4.4.0-dev"
+ruleidsforexceptions:
+  RequestHeaders: 100`)
+
+	confData, err := gCfg.LoadConfig(config)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if len(confData.Modelplugins) == 0 {
+		t.Fatal("no model plugins in parsed config")
+	}
+	plugin := confData.Modelplugins[0]
+	if !plugin.Training {
+		t.Error("expected Training to be true")
+	}
+	if plugin.TrainingData.MaxSamples != 50 {
+		t.Errorf("expected MaxSamples = 50, got %d", plugin.TrainingData.MaxSamples)
+	}
+	if plugin.TrainingData.ResultFilePath != "/tmp/training_results.json" {
+		t.Errorf("expected ResultFilePath = /tmp/training_results.json, got %q", plugin.TrainingData.ResultFilePath)
+	}
+}
+
+func TestNewWAFWithTrainingModel(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_training_valid.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWAFConfig()
+	_, err := NewWAF(wafConfig)
+	if err != nil {
+		t.Fatalf("expected no error for valid training model config, got: %v", err)
+	}
+	if gConfig.waceModels == nil {
+		t.Fatal("waceModels is nil after loading training config")
+	}
+	if len(gConfig.waceModels.reqHeadModelIDs) == 0 {
+		t.Error("expected training model to be present in reqHeadModelIDs")
+	}
+}
+
+func TestNewWAFWithInvalidTrainingConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		configFile string
+	}{
+		{
+			name:       "training and async are mutually exclusive",
+			configFile: "testdata/config/waceconfig_training_async.yaml",
+		},
+		{
+			name:       "training and remote are mutually exclusive",
+			configFile: "testdata/config/waceconfig_training_remote.yaml",
+		},
+		{
+			name:       "training with zero max_samples is invalid",
+			configFile: "testdata/config/waceconfig_training_no_samples.yaml",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configFilePath = tt.configFile
+			gConfig = nil
+
+			defer func() {
+				gConfig = nil
+				configstore.Clean()
+			}()
+
+			wafConfig := NewWAFConfig()
+			_, err := NewWAF(wafConfig)
+			if err == nil {
+				t.Error("expected error but got none")
+			}
+		})
 	}
 }
 

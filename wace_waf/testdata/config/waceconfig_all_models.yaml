@@ -46,8 +46,6 @@ decisionplugins:
       waf_weight: "0.5"
       threshold: "0.5"
 
-natsurl: "localhost:4222"
-
 options:
   otelurl: "localhost:4317"
   crs_version: "4.4.0-dev"

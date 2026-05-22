@@ -1,0 +1,28 @@
+#WACE configuration file - invalid: training + remote combination
+
+logpath: "/dev/null"
+loglevel: "WARN"
+
+modelplugins:
+  - id: "trivial_training"
+    plugintype: RequestHeaders
+    path: "testdata/plugins/trivial.so"
+    weight: 0.25
+    training: true
+    remote: true
+    training_data:
+      max_samples: 10
+      result_file_path: "/tmp/training_results.json"
+
+decisionplugins:
+  - id: "weighted_sum"
+    path: "testdata/plugins/weighted_sum.so"
+    params:
+      waf_weight: "0.5"
+      threshold: "0.5"
+
+options:
+  crs_version: "4.4.0-dev"
+
+ruleidsforexceptions:
+  RequestHeaders: 100

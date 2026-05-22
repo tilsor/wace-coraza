@@ -7,7 +7,7 @@ import (
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
-	"github.com/tilsor/ModSecIntl_wace_lib/pluginmanager"
+	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
 
 func TestNewWaf(t *testing.T) {
@@ -67,13 +67,13 @@ func TestTransactionAddData(t *testing.T) {
 	if !ok {
 		t.Errorf("Error casting to WaceTransaction")
 	}
-	expectedPayload := pluginmanager.HTTPPayload{
+	expectedPayload := waceapi.HTTPPayload{
 		URI:             "http://localhost:8090",
 		Method:          "GET",
 		HTTPVersion:     "HTTP/1.1",
-		RequestHeaders:  []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		RequestHeaders:  []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
 		RequestBody:     "test",
-		ResponseHeaders: []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		ResponseHeaders: []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
 		ResponseBody:    "test",
 	}
 	if !reflect.DeepEqual(*txW.httpPayload, expectedPayload) {
@@ -123,13 +123,13 @@ func TestTransactionWithIDAddData(t *testing.T) {
 	if !ok {
 		t.Errorf("Error casting to WaceTransaction")
 	}
-	expectedPayload := pluginmanager.HTTPPayload{
+	expectedPayload := waceapi.HTTPPayload{
 		URI:             "http://localhost:8090",
 		Method:          "GET",
 		HTTPVersion:     "HTTP/1.1",
-		RequestHeaders:  []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		RequestHeaders:  []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
 		RequestBody:     "test",
-		ResponseHeaders: []pluginmanager.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
+		ResponseHeaders: []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
 		ResponseBody:    "test",
 	}
 	if !reflect.DeepEqual(*txW.httpPayload, expectedPayload) {
@@ -146,7 +146,7 @@ func TestTransactionProcess(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -156,8 +156,9 @@ func TestTransactionProcess(t *testing.T) {
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
-	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.ProcessURI("/", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	tx.AddRequestHeader("Host", "Test")
 	i := tx.ProcessRequestHeaders()
 	if i != nil {
 		t.Errorf("Error processing request headers that should not be blocked")
@@ -340,6 +341,44 @@ func TestExceptions(t *testing.T) {
 	i, err = tx.ProcessResponseBody()
 	if err != nil {
 		t.Errorf("Error processing response body: %v", err.Error())
+	}
+
+	tx.ProcessLogging()
+}
+
+// TestTrainingModelNotUsedInDecision verifies that a model in training mode
+// does not contribute to the decision plugin, even if it would cause a block
+// in sync mode. Compare with TestBlockTransactions which uses trivial2 as a
+// sync model and expects a block.
+func TestTrainingModelNotUsedInDecision(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_training_no_block.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	// Set WAF anomaly scores to zero so only model scores can trigger blocking.
+	// trivial2 (weight=1, attack=1.0) is in training mode and must be excluded
+	// from the decision. trivial (weight=0, attack=0.0) is the only sync model.
+	wafConf := NewWAFConfig().
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=0',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+
+	tx := waf.NewTransaction()
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	tx.AddRequestHeader("Host", "Test")
+
+	i := tx.ProcessRequestHeaders()
+	if i != nil {
+		t.Error("transaction was blocked but must not be: trivial2 is in training mode and must not contribute to the decision")
 	}
 
 	tx.ProcessLogging()
