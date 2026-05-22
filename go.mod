@@ -5,8 +5,9 @@ go 1.26.2
 require github.com/corazawaf/coraza/v3 v3.7.0
 
 require (
+	github.com/magefile/mage v1.17.2
 	github.com/tilsor/ModSecIntl_logging v1.0.1
-	github.com/tilsor/ModSecIntl_wace_lib v1.0.1-0.20260430175041-2a68d9bda7ce
+	github.com/tilsor/ModSecIntl_wace_lib v1.0.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
 	go.opentelemetry.io/otel/metric v1.43.0
@@ -17,25 +18,20 @@ require (
 )
 
 require (
-	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/corazawaf/libinjection-go v0.3.2 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260430182902-b6187a392ed4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gotnospirit/makeplural v0.0.0-20180622080156-a5f48d94d976 // indirect
-	github.com/gotnospirit/messageformat v0.0.0-20221001023931-dfe49f1eb092 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/kaptinlin/go-i18n v0.4.5 // indirect
 	github.com/kaptinlin/jsonpointer v0.4.20 // indirect
 	github.com/kaptinlin/jsonschema v0.7.11 // indirect
 	github.com/kaptinlin/messageformat-go v0.6.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
-	github.com/magefile/mage v1.17.2 // indirect
 	github.com/nats-io/nats.go v1.51.0 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
