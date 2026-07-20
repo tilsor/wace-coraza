@@ -247,21 +247,7 @@ func reportingRule(phase int) string {
 }
 
 // getConfigRules returns the WACE directives injected around the OWASP CRS
-// rules. Coraza (and this integration) only supports CRS v4 and later, so
-// CRSVersion is accepted for forward compatibility but no longer branches
-// the rule set.
-//
-// CRSVersion is also used as the signal for whether CRS is loaded at all: an
-// empty value means the operator did not configure a CRS version, so no CRS
-// rules are expected to exist and this returns no directives. This matters
-// because SecRuleUpdateActionById (unlike SecRuleRemoveById) fails WAF
-// creation if its target rule id isn't loaded.
-//
-// Instead of removing CRS's own blocking rules (949111/949110 for inbound,
-// 959101/959100 for outbound), their disruptive action is turned into
-// "pass" via SecRuleUpdateActionById: this keeps the rules - and their
-// id/msg/tags - visible in the audit trail while ensuring only the WACE
-// decision plugin can actually block a transaction.
+// rules.
 func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 	if CRSVersion == "" {
 		return []string{}
