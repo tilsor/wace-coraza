@@ -18,7 +18,9 @@ func TestNewWaf(t *testing.T) {
 		gConfig = nil
 		configstore.Clean()
 	}()
-	wafConfig := NewWAFConfig()
+	wafConfig := NewWAFConfig().
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 	_, err := NewWAF(wafConfig)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
@@ -34,7 +36,9 @@ func TestTransactionAddData(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -90,7 +94,9 @@ func TestTransactionWithIDAddData(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -217,6 +223,8 @@ func TestBlockTransactions(t *testing.T) {
 	}()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
 		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
 
 	waf, err := NewWAF(wafConf)
@@ -289,7 +297,10 @@ func TestExceptions(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").WithDirectivesFromFile("testdata/config/waceexceptions.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectivesFromFile("testdata/config/waceexceptions.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -364,6 +375,8 @@ func TestTrainingModelNotUsedInDecision(t *testing.T) {
 	// from the decision. trivial (weight=0, attack=0.0) is the only sync model.
 	wafConf := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
 		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=0',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
 
 	waf, err := NewWAF(wafConf)
