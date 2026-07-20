@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -286,31 +285,26 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	if t.waf.waceWafConfig.earlyBlocking {
-		mtRules := t.MatchedRules()
-		mtRulesLen := len(mtRules)
+	// Skip the WACE check if a disruptive rule already interrupted the
+	// transaction: the reporting SecAction never ran and Coraza is already
+	// blocking the request.
+	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
+		if wafParams, ok := parseScoreParams(t.MatchedRules(), "1"); ok {
+			t.coordinator.Wait()
+			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
-		wafParams := map[string]string{}
-		for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
-			scoreParts := strings.Split(score, "=")
-			wafParams[scoreParts[0]] = scoreParts[1]
-		}
-		wafParams["phase"] = "1"
+			if err == nil {
+				if res {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
+					interruption = &types.Interruption{Action: "deny"}
+					t.httpPayload.ResponseCode = 403
 
-		t.coordinator.Wait()
-		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
-
-		if err == nil {
-			if res {
-				t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
-				interruption = &types.Interruption{Action: "deny"}
-				t.httpPayload.ResponseCode = 403
-
-				blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
-				if err != nil {
-					panic(err)
+					blocked, err := meter.Int64Counter("http.client.request.blockedp1.total")
+					if err != nil {
+						panic(err)
+					}
+					blocked.Add(ctx, 1)
 				}
-				blocked.Add(ctx, 1)
 			}
 		}
 	}
@@ -437,33 +431,28 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request body by Coraza: "+err.Error())
 	}
 
-	mtRules := t.MatchedRules()
+	// Skip the WACE check if a disruptive rule already interrupted the
+	// transaction: the reporting SecAction never ran and Coraza is already
+	// blocking the request.
+	if interruption == nil {
+		if wafParams, ok := parseScoreParams(t.MatchedRules(), "2"); ok {
+			t.coordinator.Wait()
+			result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
-	mtRulesLen := len(mtRules)
+			if err2 == nil {
+				if result {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
-	wafParams := map[string]string{}
-	for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
-		scoreParts := strings.Split(score, "=")
-		wafParams[scoreParts[0]] = scoreParts[1]
-	}
-	wafParams["phase"] = "2"
+					interruption = &types.Interruption{Action: "deny"}
+					t.httpPayload.ResponseCode = 403
 
-	t.coordinator.Wait()
-	result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
-
-	// TODO: Fix behaviour
-	if err2 == nil {
-		if result {
-			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
-
-			interruption = &types.Interruption{Action: "deny"}
-			t.httpPayload.ResponseCode = 403
-
-			blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
-			if err2 != nil {
-				panic(err2)
+					blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
+					if err2 != nil {
+						panic(err2)
+					}
+					blocked.Add(ctx, 1)
+				}
 			}
-			blocked.Add(ctx, 1)
 		}
 	}
 
@@ -537,31 +526,26 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	if t.waf.waceWafConfig.earlyBlocking {
-		mtRules := t.MatchedRules()
-		mtRulesLen := len(mtRules)
+	// Skip the WACE check if a disruptive rule already interrupted the
+	// transaction: the reporting SecAction never ran and Coraza is already
+	// blocking the request.
+	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
+		if wafParams, ok := parseScoreParams(t.MatchedRules(), "3"); ok {
+			t.coordinator.Wait()
+			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
-		wafParams := map[string]string{}
-		for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
-			scoreParts := strings.Split(score, "=")
-			wafParams[scoreParts[0]] = scoreParts[1]
-		}
-		wafParams["phase"] = "3"
+			if err == nil {
+				if res {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
-		t.coordinator.Wait()
-		res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
+					interruption = &types.Interruption{Action: "deny"}
 
-		if err == nil {
-			if res {
-				t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
-
-				interruption = &types.Interruption{Action: "deny"}
-
-				blocked, err := meter.Int64Counter("http.client.request.blockedp3.total")
-				if err != nil {
-					panic(err)
+					blocked, err := meter.Int64Counter("http.client.request.blockedp3.total")
+					if err != nil {
+						panic(err)
+					}
+					blocked.Add(ctx, 1)
 				}
-				blocked.Add(ctx, 1)
 			}
 		}
 	}
@@ -673,30 +657,27 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	interruption, err := t.Transaction.ProcessResponseBody()
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	mtRules := t.MatchedRules()
-	mtRulesLen := len(mtRules)
+	// Skip the WACE check if a disruptive rule already interrupted the
+	// transaction: the reporting SecAction never ran and Coraza is already
+	// blocking the request.
+	if interruption == nil {
+		if wafParams, ok := parseScoreParams(t.MatchedRules(), "4"); ok {
+			t.coordinator.Wait()
+			res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
-	wafParams := map[string]string{}
-	for _, score := range strings.Split(mtRules[mtRulesLen-1].Message(), ",") {
-		scoreParts := strings.Split(score, "=")
-		wafParams[scoreParts[0]] = scoreParts[1]
-	}
-	wafParams["phase"] = "4"
+			if err2 == nil {
+				if res {
+					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
-	t.coordinator.Wait()
-	res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
+					interruption = &types.Interruption{Action: "deny"}
 
-	if err2 == nil {
-		if res {
-			t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
-
-			interruption = &types.Interruption{Action: "deny"}
-
-			blocked, err2 := meter.Int64Counter("http.client.request.blockedp4.total")
-			if err2 != nil {
-				panic(err2)
+					blocked, err2 := meter.Int64Counter("http.client.request.blockedp4.total")
+					if err2 != nil {
+						panic(err2)
+					}
+					blocked.Add(ctx, 1)
+				}
 			}
-			blocked.Add(ctx, 1)
 		}
 	}
 

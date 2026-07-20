@@ -5,8 +5,35 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/corazawaf/coraza/v3/types"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 )
+
+// testRuleMetadata is a minimal types.RuleMetadata used to build matched rules
+// in tests. It embeds the interface so only the methods actually exercised by
+// the code under test (ID) need to be implemented; any other call would panic,
+// which is the intended signal that a test relies on an unmocked method.
+type testRuleMetadata struct {
+	types.RuleMetadata
+	id int
+}
+
+func (r testRuleMetadata) ID() int { return r.id }
+
+// testMatchedRule is a minimal types.MatchedRule for tests, exposing only the
+// rule id and the (already macro-expanded) message read by parseScoreParams.
+type testMatchedRule struct {
+	types.MatchedRule
+	id      int
+	message string
+}
+
+func (m testMatchedRule) Rule() types.RuleMetadata { return testRuleMetadata{id: m.id} }
+func (m testMatchedRule) Message() string          { return m.message }
+
+func matchedRule(id int, message string) types.MatchedRule {
+	return testMatchedRule{id: id, message: message}
+}
 
 func TestGetConfigRules(t *testing.T) {
 	// Get rules for CRS Version 2
@@ -311,6 +338,104 @@ func TestNewWAFWithInvalidTrainingConfig(t *testing.T) {
 			_, err := NewWAF(wafConfig)
 			if err == nil {
 				t.Error("expected error but got none")
+			}
+		})
+	}
+}
+
+func TestParseScoreParams(t *testing.T) {
+	// A well-formed phase-2 reporting message as emitted (after macro
+	// expansion) by the id:172 SecAction from getConfigRules.
+	report172 := "inbound_blocking=10,inbound_per_pl=1-2-3-4,SQLI=5,XSS=0,COMBINED_SCORE=15"
+
+	tests := []struct {
+		name     string
+		rules    []types.MatchedRule
+		phase    string
+		wantOK   bool
+		wantVals map[string]string
+	}{
+		{
+			name:   "reporting rule present as last match",
+			rules:  []types.MatchedRule{matchedRule(942100, "SQL Injection Attack Detected"), matchedRule(172, report172)},
+			phase:  "2",
+			wantOK: true,
+			wantVals: map[string]string{
+				"inbound_blocking": "10", "inbound_per_pl": "1-2-3-4",
+				"SQLI": "5", "XSS": "0", "COMBINED_SCORE": "15", "phase": "2",
+			},
+		},
+		{
+			// Regression: the reporting SecAction is not necessarily the last
+			// matched rule. A later match must not shadow it; we locate it by id.
+			name:   "reporting rule not last, followed by another match",
+			rules:  []types.MatchedRule{matchedRule(172, report172), matchedRule(949110, "Inbound Anomaly Score Exceeded")},
+			phase:  "2",
+			wantOK: true,
+			wantVals: map[string]string{
+				"inbound_blocking": "10", "inbound_per_pl": "1-2-3-4",
+				"SQLI": "5", "XSS": "0", "COMBINED_SCORE": "15", "phase": "2",
+			},
+		},
+		{
+			// Regression for problem #1: a disruptive rule interrupted the phase
+			// before the reporting SecAction ran. The last message has no "=".
+			// Old code did strings.Split(..)[1] and panicked; now we return false.
+			name:   "reporting rule absent (deny short-circuited the phase)",
+			rules:  []types.MatchedRule{matchedRule(200002, "Failed to parse request body.")},
+			phase:  "2",
+			wantOK: false,
+		},
+		{
+			// Old code indexed rules[len-1] on an empty slice and panicked.
+			name:   "no matched rules",
+			rules:  []types.MatchedRule{},
+			phase:  "2",
+			wantOK: false,
+		},
+		{
+			// Fragments without "=" (e.g. a stray tag) must be skipped, not panic.
+			name:   "message with fragment lacking '='",
+			rules:  []types.MatchedRule{matchedRule(172, "inbound_blocking=10,tag:reporting,SQLI=5")},
+			phase:  "2",
+			wantOK: true,
+			wantVals: map[string]string{
+				"inbound_blocking": "10", "SQLI": "5", "phase": "2",
+			},
+		},
+		{
+			// Correct reporting rule is selected per phase even when several
+			// reporting SecActions are present in the matched set.
+			name:   "picks reporting rule matching the phase",
+			rules:  []types.MatchedRule{matchedRule(171, "inbound_blocking=1,phaseflag=one"), matchedRule(172, report172)},
+			phase:  "1",
+			wantOK: true,
+			wantVals: map[string]string{
+				"inbound_blocking": "1", "phaseflag": "one", "phase": "1",
+			},
+		},
+		{
+			name:   "unknown phase",
+			rules:  []types.MatchedRule{matchedRule(172, report172)},
+			phase:  "9",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseScoreParams(tt.rules, tt.phase)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !tt.wantOK {
+				if got != nil {
+					t.Errorf("expected nil params when ok is false, got %v", got)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got, tt.wantVals) {
+				t.Errorf("params mismatch:\n got:  %v\n want: %v", got, tt.wantVals)
 			}
 		})
 	}

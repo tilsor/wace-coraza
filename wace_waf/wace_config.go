@@ -451,6 +451,52 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 	return conf.exceptionsConfig
 }
 
+// reportingRuleIDs maps the processing phase (as used in wafParams) to the id
+// of the reporting SecAction that logs the anomaly scores. These ids must match
+// the SecAction directives injected by getConfigRules.
+var reportingRuleIDs = map[string]int{
+	"1": 171,
+	"2": 172,
+	"3": 173,
+	"4": 174,
+}
+
+// parseScoreParams locates the WACE reporting rule for the given phase among the
+// matched rules and parses its message into the score parameters passed to the
+// decision plugin. The matched rules are scanned in reverse because the reporting
+// SecAction is normally the last rule to match in its phase, but this does not
+// rely on it being last: it matches explicitly by rule id.
+//
+// It returns ok == false when the reporting rule is not present. That happens
+// when a disruptive (deny) rule short-circuited the phase before the reporting
+// SecAction could run, in which case Coraza is already blocking the transaction
+// and there is nothing for WACE to evaluate.
+func parseScoreParams(rules []types.MatchedRule, phase string) (map[string]string, bool) {
+	reportID, ok := reportingRuleIDs[phase]
+	if !ok {
+		return nil, false
+	}
+
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].Rule().ID() != reportID {
+			continue
+		}
+
+		wafParams := map[string]string{}
+		for _, score := range strings.Split(rules[i].Message(), ",") {
+			key, value, found := strings.Cut(score, "=")
+			if !found {
+				continue
+			}
+			wafParams[key] = value
+		}
+		wafParams["phase"] = phase
+		return wafParams, true
+	}
+
+	return nil, false
+}
+
 // ParseActiveModels parses the exception rule message to get the active models
 func ParseActiveModels(exceptionRuleMessage string) []string {
 	models := strings.Split(exceptionRuleMessage, ",")
