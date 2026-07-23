@@ -32,14 +32,14 @@ This section provides details on each field within the configuration files and t
 **Network and Options**
 
 - natsurl (String): URL for the NATS server, which handles messaging between components. Default format is hostname:port.
-- options:
-  - otelurl (String): URL for the OpenTelemetry collector in order to send metrics.
-  - crs_version (String): version of the OWASP CRS in use.
-  - early_blocking (String): enables or disables early blocking of requests (true or false).
+- otel_url (String): URL for the OpenTelemetry collector in order to send metrics.
+- crs_version (String): version of the OWASP CRS in use.
+- early_blocking (Boolean): enables or disables early blocking of requests.
+- blocking (Boolean): enables or disables denying transactions based on the WACE decision plugin's result. When false, transactions are still analyzed and scored, but never denied. If a per-app waceappconfig.yaml is used, its own `blocking` value takes priority over this one.
 
 **Rule IDs for Exceptions**
 
-- ruleidsforexceptions: define the IDs used to configure default rules for model exceptions.
+- exception_ids: define the IDs used to configure default rules for model exceptions.
   - RequestHeaders: ID for exceptions related to request headers.
   - RequestBody: ID for exceptions related to request bodies.
   - AllRequest: ID for exceptions applied to all requests.
@@ -50,8 +50,10 @@ This section provides details on each field within the configuration files and t
 ### File: <app>waceappconfig.yaml
 - modelids (List): a list of model plugin IDs to be applied in this application. Each ID SHOULD match a modelplugin defined in the main configuration.
 - decisionid (String): specifies the ID of the decision plugin to use. This ID should correspond to one in the decisionplugins section of the main configuration.
-- options:
-  - appname (String): the name of the application. This can be used for identification purposes.
+- early_blocking (Boolean): overrides the general config's early_blocking for this application.
+- disable_crs (Boolean): when true, skips injecting the OWASP CRS-specific directives (CRS blocking-rule neutralization and anomaly-score reporting rules) for this application, so the CRS ruleset does not need to be loaded at all. Custom SecLang rules (e.g. virtual patches) are unaffected and still apply.
+- blocking (Boolean): overrides the general config's blocking for this application.
+- app_name (String): the name of the application. This can be used for identification purposes.
 
 ### File: waceexceptions.conf
 
