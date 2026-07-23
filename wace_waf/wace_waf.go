@@ -289,12 +289,13 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
+	t.coordinator.Wait()
+
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
 		if wafParams, ok := parseScoreParams(t.MatchedRules(), "1"); ok {
-			t.coordinator.Wait()
 			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err == nil {
@@ -435,12 +436,13 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		t.waf.logger.TPrintln(lg.ERROR, t.Transaction.ID(), "Error processing request body by Coraza: "+err.Error())
 	}
 
+	t.coordinator.Wait()
+
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if interruption == nil {
 		if wafParams, ok := parseScoreParams(t.MatchedRules(), "2"); ok {
-			t.coordinator.Wait()
 			result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err2 == nil {
@@ -530,12 +532,13 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
+	t.coordinator.Wait()
+
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
 		if wafParams, ok := parseScoreParams(t.MatchedRules(), "3"); ok {
-			t.coordinator.Wait()
 			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err == nil {
@@ -661,12 +664,13 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	interruption, err := t.Transaction.ProcessResponseBody()
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
+	t.coordinator.Wait()
+
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if interruption == nil {
 		if wafParams, ok := parseScoreParams(t.MatchedRules(), "4"); ok {
-			t.coordinator.Wait()
 			res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err2 == nil {
