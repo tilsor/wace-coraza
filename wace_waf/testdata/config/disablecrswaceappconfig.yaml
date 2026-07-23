@@ -2,4 +2,4 @@ modelids: ["trivial"]
 
 decisionid: "weighted_sum"
 
-app_name: "Application 1"
+disable_crs: true

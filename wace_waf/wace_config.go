@@ -24,6 +24,7 @@ type generalConfig struct {
 	waceDecisions        []string
 	earlyBlocking        bool
 	crsVersion           string
+	blocking             bool
 	ruleIdsForExceptions map[string]int
 	hash                 string
 }
@@ -37,6 +38,8 @@ type waceWAFConfig struct {
 	waceModels            *WaceModels
 	waceDecisionId        string
 	earlyBlocking         bool
+	disableCRS            bool
+	blocking              bool
 }
 
 // WaceModels holds the model ids for the different types of models
@@ -51,16 +54,22 @@ type WaceModels struct {
 
 // waceGeneralConfigFileData holds the general configuration data from the config file
 type waceGeneralConfigFileData struct {
-	cf.ConfigFileData    `yaml:",inline"`
-	Options              map[string]string `yaml:"options"`
-	RuleIdsForExceptions map[string]int    `yaml:"ruleidsforexceptions"`
+	cf.ConfigFileData `yaml:",inline"`
+	EarlyBlocking     bool           `yaml:"early_blocking"`
+	CRSVersion        string         `yaml:"crs_version"`
+	Blocking          bool           `yaml:"blocking"`
+	OtelURL           string         `yaml:"otel_url"`
+	ExceptionIDs      map[string]int `yaml:"exception_ids"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
 type WaceAppConfigFileData struct {
-	ModelIds   []string `yaml:"modelids"`
-	DecisionId string   `yaml:"decisionid"`
-	Options    map[string]string
+	ModelIds      []string `yaml:"modelids"`
+	DecisionId    string   `yaml:"decisionid"`
+	EarlyBlocking bool     `yaml:"early_blocking"`
+	DisableCRS    bool     `yaml:"disable_crs"`
+	Blocking      bool     `yaml:"blocking"`
+	AppName       string   `yaml:"app_name"`
 }
 
 func dataHash(data []byte) string {
@@ -77,19 +86,14 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	if err != nil {
 		return waceGeneralConfigFileData{}, err
 	}
-	for key, value := range confData.Options {
-		if key == "early_blocking" {
-			g.earlyBlocking = value == "true"
-		} else if key == "crs_version" {
-			g.crsVersion = value
-		} else if key == "otelurl" {
-			g.otelURL = value
-		}
-	}
+	g.earlyBlocking = confData.EarlyBlocking
+	g.crsVersion = confData.CRSVersion
+	g.blocking = confData.Blocking
+	g.otelURL = confData.OtelURL
 	if g.ruleIdsForExceptions == nil {
 		g.ruleIdsForExceptions = make(map[string]int)
 	}
-	for key, value := range confData.RuleIdsForExceptions {
+	for key, value := range confData.ExceptionIDs {
 		g.ruleIdsForExceptions[key] = value
 	}
 
@@ -104,11 +108,10 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	if err != nil {
 		return err
 	}
-	for key, value := range conf.Options {
-		if key == "early_blocking" {
-			w.earlyBlocking = value == "true"
-		}
-	}
+
+	w.disableCRS = conf.DisableCRS
+	w.earlyBlocking = conf.EarlyBlocking
+	w.blocking = conf.Blocking
 
 	w.waceModels, err = NewWaceModelsConfig(conf.ModelIds)
 	if err != nil {
@@ -137,6 +140,7 @@ func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
 // It uses the first decision plugin and uses all the models declared in the general configuration
 func (w *waceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.earlyBlocking = gConfig.earlyBlocking
+	w.blocking = g.blocking
 	w.waceModels = g.waceModels
 	w.waceDecisionId = g.waceDecisions[0]
 }
@@ -273,7 +277,7 @@ func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 
 // NewWAFConfig creates a new WAFConfig with default values
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, "", false}
+	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, "", false, false, false}
 }
 
 // WithDirectivesFromFile implements the function specified in the WAFConfig interface to add directives from a file

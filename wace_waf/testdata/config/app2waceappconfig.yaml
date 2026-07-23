@@ -1,0 +1,8 @@
+modelids: ["trivial"]
+
+decisionid: "weighted_sum"
+
+early_blocking: true
+disable_crs: true
+blocking: true
+app_name: "Application 2"

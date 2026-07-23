@@ -236,6 +236,117 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 	}
 }
 
+// TestWaceWAFConfigLoadConfigNewFields verifies that LoadConfigYaml parses the
+// early_blocking, disable_crs, blocking and app_name fields from a
+// per-app waceappconfig.yaml file.
+func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWAFConfig().
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+	_, err := NewWAF(wafConfig)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+
+	wConfig := waceWAFConfig{}
+	err = wConfig.LoadConfig("testdata/config/app2waceappconfig.yaml")
+	if err != nil {
+		t.Fatalf("Error loading waceappconfig: %v", err)
+	}
+
+	if !wConfig.earlyBlocking {
+		t.Error("expected earlyBlocking to be true")
+	}
+	if !wConfig.disableCRS {
+		t.Error("expected disableCRS to be true")
+	}
+	if !wConfig.blocking {
+		t.Error("expected blocking to be true")
+	}
+}
+
+// TestLoadConfigFromGeneralConfigPropagatesBlocking is a regression test:
+// LoadConfigFromGeneralConfig (the path used when no per-app waceappconfig.yaml
+// is provided) must fall back to the general configuration's blocking value,
+// the same way it already does for earlyBlocking. Previously blocking was left
+// unset here, so a transaction could never be denied unless a per-app config
+// file was used.
+func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
+	gConfig = &generalConfig{
+		earlyBlocking: true,
+		blocking:      true,
+		waceModels:    &WaceModels{},
+		waceDecisions: []string{"weighted_sum"},
+	}
+	defer func() { gConfig = nil }()
+
+	w := &waceWAFConfig{}
+	w.LoadConfigFromGeneralConfig(*gConfig)
+
+	if !w.blocking {
+		t.Error("expected blocking to be propagated from general config, got false")
+	}
+	if !w.earlyBlocking {
+		t.Error("expected earlyBlocking to be propagated from general config, got false")
+	}
+	if w.waceDecisionId != "weighted_sum" {
+		t.Errorf("expected waceDecisionId %q, got %q", "weighted_sum", w.waceDecisionId)
+	}
+}
+
+// TestNewWAFDisableCRS verifies that setting disable_crs in the per-app
+// config skips injecting the CRS-specific directives (getConfigRules), even
+// though a crs_version is configured in the general config. The CRS ruleset
+// itself is intentionally not loaded here: if disable_crs were ignored,
+// WAF creation would fail because the injected SecRuleUpdateActionById
+// directives reference CRS rule ids that don't exist.
+func TestNewWAFDisableCRS(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWAFConfig().
+		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml")
+	_, err := NewWAF(wafConfig)
+	if err != nil {
+		t.Fatalf("expected WAF creation to succeed with disable_crs set, got: %v", err)
+	}
+}
+
+// TestNewWAFCRSRequiredWithoutDisableCRS is the counterpart to
+// TestNewWAFDisableCRS: without disable_crs, getConfigRules still injects the
+// CRS-specific directives, so creating a WAF without the CRS ruleset loaded
+// must fail. This proves TestNewWAFDisableCRS passes because of disable_crs,
+// not because the directives are always skipped.
+func TestNewWAFCRSRequiredWithoutDisableCRS(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWAFConfig().
+		WithDirectivesFromFile("testdata/config/app1waceappconfig.yaml")
+	_, err := NewWAF(wafConfig)
+	if err == nil {
+		t.Fatal("expected WAF creation to fail: crs_version is configured but the CRS ruleset was never loaded")
+	}
+}
+
 func TestNewWaceDefaultModelsConfig(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil

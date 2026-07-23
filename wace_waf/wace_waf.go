@@ -121,17 +121,21 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		return nil, fmt.Errorf("Error casting to waceWAFConfig")
 	}
 
+	// Get rules by CRS Version
+	configRules := []string{}
+
 	if wafConfigs.waceAppConfigFilePath != "" {
 		err := wafConfigs.LoadConfig(wafConfigs.waceAppConfigFilePath)
 		if err != nil {
 			return nil, fmt.Errorf("Error loading waceAppConfig: %v", err)
 		}
+		if !wafConfigs.disableCRS {
+			configRules = wafConfigs.getConfigRules(gConfig.crsVersion)
+		}
 	} else {
 		wafConfigs.LoadConfigFromGeneralConfig(*gConfig)
+		configRules = wafConfigs.getConfigRules(gConfig.crsVersion)
 	}
-
-	// Get rules by CRS Version
-	configRules := wafConfigs.getConfigRules(gConfig.crsVersion)
 
 	for _, rule := range configRules {
 		wafConfigs.WAFConfig = wafConfigs.WAFConfig.WithDirectives(rule)
@@ -294,7 +298,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err == nil {
-				if res {
+				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 					interruption = &types.Interruption{Action: "deny"}
 					t.httpPayload.ResponseCode = 403
@@ -440,7 +444,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err2 == nil {
-				if result {
+				if result && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 					interruption = &types.Interruption{Action: "deny"}
@@ -535,7 +539,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err == nil {
-				if res {
+				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 					interruption = &types.Interruption{Action: "deny"}
@@ -666,7 +670,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
 
 			if err2 == nil {
-				if res {
+				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 					interruption = &types.Interruption{Action: "deny"}
