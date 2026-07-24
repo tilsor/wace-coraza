@@ -31,6 +31,11 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
+const (
+	DEFAULT_CONFIG_FILEPATH = "waceconfig.yaml"
+	WACE_CONFIG_FILEPATH    = "WACE_CONFIG_FILEPATH"
+)
+
 // WaceWAF implements the WAF interface provided by Coraza WAF and adds the WACE functionality to it
 type WaceWAF struct {
 	coraza.WAF
@@ -56,8 +61,15 @@ var ctx = context.Background()
 var meter metric.Meter
 var configFilePath string
 
+func resolveConfigFilePath() string {
+	if envFilePath := os.Getenv(WACE_CONFIG_FILEPATH); envFilePath != "" {
+		return envFilePath
+	}
+	return DEFAULT_CONFIG_FILEPATH
+}
+
 func init() {
-	configFilePath = "waceconfig.yaml"
+	configFilePath = resolveConfigFilePath()
 }
 
 // NewWAF creates a new WaceWAF object with the given configuration
