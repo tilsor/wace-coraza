@@ -77,6 +77,8 @@ github.com/tilsor/ModSecIntl_logging v1.0.1 h1:wFd3SxJPUU5JxX2UlrsH0Ef/m9a18d/VR
 github.com/tilsor/ModSecIntl_logging v1.0.1/go.mod h1:9RrpYmS4v/wYIiiYXzDW6Lqr8Xb8wq3ejpHi8jmQsyo=
 github.com/tilsor/ModSecIntl_wace_lib v1.0.1 h1:mqbDrN0mw+BB3IPgTPZKfu9j9XFUYMiQkyuDKvaF4BQ=
 github.com/tilsor/ModSecIntl_wace_lib v1.0.1/go.mod h1:fj/ivqzaDNhmpyODcBDU8IuT35v/VEp9CMvHDJMJLnE=
+github.com/tilsor/ModSecIntl_wace_lib v1.0.2-0.20260724141657-7199d0ed2a44 h1:EPtaZ6NdvezZdRwUsWlLUHrJXx4A67fvJK/fTfOJ9Jc=
+github.com/tilsor/ModSecIntl_wace_lib v1.0.2-0.20260724141657-7199d0ed2a44/go.mod h1:fj/ivqzaDNhmpyODcBDU8IuT35v/VEp9CMvHDJMJLnE=
 github.com/valllabh/ocsf-schema-golang v1.0.3 h1:eR8k/3jP/OOqB8LRCtdJ4U+vlgd/gk5y3KMXoodrsrw=
 github.com/valllabh/ocsf-schema-golang v1.0.3/go.mod h1:sZ3as9xqm1SSK5feFWIR2CuGeGRhsM7TR1MbpBctzPk=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
