@@ -1,6 +1,7 @@
 package waceWAF
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +10,36 @@ import (
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
+
+func TestResolveConfigFilePathUsesEnvVar(t *testing.T) {
+	expected := "/custom/path/config.yaml"
+	t.Setenv(WACE_CONFIG_FILEPATH, expected)
+	if got := resolveConfigFilePath(); got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestResolveConfigFilePathDefaultWhenEnvVarEmpty(t *testing.T) {
+	t.Setenv(WACE_CONFIG_FILEPATH, "")
+	if got := resolveConfigFilePath(); got != DEFAULT_CONFIG_FILEPATH {
+		t.Errorf("expected default %q, got %q", DEFAULT_CONFIG_FILEPATH, got)
+	}
+}
+
+func TestResolveConfigFilePathDefaultWhenEnvVarUnset(t *testing.T) {
+	orig, wasSet := os.LookupEnv(WACE_CONFIG_FILEPATH)
+	os.Unsetenv(WACE_CONFIG_FILEPATH)
+	t.Cleanup(func() {
+		if wasSet {
+			os.Setenv(WACE_CONFIG_FILEPATH, orig)
+		} else {
+			os.Unsetenv(WACE_CONFIG_FILEPATH)
+		}
+	})
+	if got := resolveConfigFilePath(); got != DEFAULT_CONFIG_FILEPATH {
+		t.Errorf("expected default %q, got %q", DEFAULT_CONFIG_FILEPATH, got)
+	}
+}
 
 func TestNewWaf(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
