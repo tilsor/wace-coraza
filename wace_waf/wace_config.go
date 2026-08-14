@@ -247,7 +247,7 @@ const reportingMsgTemplate = "inbound_blocking=%{tx.blocking_inbound_anomaly_sco
 // the given phase, using the id assigned to that phase in reportingRuleIDs.
 func reportingRule(phase int) string {
 	id := reportingRuleIDs[strconv.Itoa(phase)]
-	return fmt.Sprintf("SecAction \"id:%d,phase:%d,pass,t:none,noauditlog,msg:'%s',tag:'reporting',severity:'NOTICE'\"", id, phase, reportingMsgTemplate)
+	return fmt.Sprintf("SecAction \"id:%d,phase:%d,pass,t:none,noauditlog,nolog,msg:'%s',tag:'reporting',severity:'NOTICE'\"", id, phase, reportingMsgTemplate)
 }
 
 // getConfigRules returns the WACE directives injected around the OWASP CRS
