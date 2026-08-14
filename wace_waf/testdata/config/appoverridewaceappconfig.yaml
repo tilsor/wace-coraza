@@ -1,0 +1,6 @@
+modelids: ["trivial", "trivial2"]
+
+decisionid: "weighted_sum"
+
+early_blocking: true
+blocking: true

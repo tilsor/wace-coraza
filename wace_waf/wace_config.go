@@ -24,6 +24,7 @@ type generalConfig struct {
 	waceDecisions        []string
 	earlyBlocking        bool
 	crsVersion           string
+	blocking             bool
 	ruleIdsForExceptions map[string]int
 	hash                 string
 }
@@ -37,6 +38,8 @@ type waceWAFConfig struct {
 	waceModels            *WaceModels
 	waceDecisionId        string
 	earlyBlocking         bool
+	disableCRS            bool
+	blocking              bool
 }
 
 // WaceModels holds the model ids for the different types of models
@@ -51,16 +54,22 @@ type WaceModels struct {
 
 // waceGeneralConfigFileData holds the general configuration data from the config file
 type waceGeneralConfigFileData struct {
-	cf.ConfigFileData    `yaml:",inline"`
-	Options              map[string]string `yaml:"options"`
-	RuleIdsForExceptions map[string]int    `yaml:"ruleidsforexceptions"`
+	cf.ConfigFileData `yaml:",inline"`
+	EarlyBlocking     bool           `yaml:"early_blocking"`
+	CRSVersion        string         `yaml:"crs_version"`
+	Blocking          bool           `yaml:"blocking"`
+	OtelURL           string         `yaml:"otel_url"`
+	ExceptionIDs      map[string]int `yaml:"exception_ids"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
 type WaceAppConfigFileData struct {
-	ModelIds   []string `yaml:"modelids"`
-	DecisionId string   `yaml:"decisionid"`
-	Options    map[string]string
+	ModelIds      []string `yaml:"modelids"`
+	DecisionId    string   `yaml:"decisionid"`
+	EarlyBlocking bool     `yaml:"early_blocking"`
+	DisableCRS    bool     `yaml:"disable_crs"`
+	Blocking      bool     `yaml:"blocking"`
+	AppName       string   `yaml:"app_name"`
 }
 
 func dataHash(data []byte) string {
@@ -77,19 +86,14 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	if err != nil {
 		return waceGeneralConfigFileData{}, err
 	}
-	for key, value := range confData.Options {
-		if key == "early_blocking" {
-			g.earlyBlocking = value == "true"
-		} else if key == "crs_version" {
-			g.crsVersion = value
-		} else if key == "otelurl" {
-			g.otelURL = value
-		}
-	}
+	g.earlyBlocking = confData.EarlyBlocking
+	g.crsVersion = confData.CRSVersion
+	g.blocking = confData.Blocking
+	g.otelURL = confData.OtelURL
 	if g.ruleIdsForExceptions == nil {
 		g.ruleIdsForExceptions = make(map[string]int)
 	}
-	for key, value := range confData.RuleIdsForExceptions {
+	for key, value := range confData.ExceptionIDs {
 		g.ruleIdsForExceptions[key] = value
 	}
 
@@ -104,11 +108,10 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	if err != nil {
 		return err
 	}
-	for key, value := range conf.Options {
-		if key == "early_blocking" {
-			w.earlyBlocking = value == "true"
-		}
-	}
+
+	w.disableCRS = conf.DisableCRS
+	w.earlyBlocking = conf.EarlyBlocking
+	w.blocking = conf.Blocking
 
 	w.waceModels, err = NewWaceModelsConfig(conf.ModelIds)
 	if err != nil {
@@ -137,6 +140,7 @@ func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
 // It uses the first decision plugin and uses all the models declared in the general configuration
 func (w *waceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.earlyBlocking = gConfig.earlyBlocking
+	w.blocking = g.blocking
 	w.waceModels = g.waceModels
 	w.waceDecisionId = g.waceDecisions[0]
 }
@@ -233,61 +237,47 @@ func NewWaceModelsConfig(modelsIds []string) (*WaceModels, error) {
 	return models, nil
 }
 
-// getConfigRules returns the rules that are specific to the CRS version
+// reportingMsgTemplate is the msg of the SecAction that reports, per phase,
+// the anomaly scores computed by CRS so the WACE decision plugin can read
+// them back out of the matched rule (see parseScoreParams). The content is
+// identical for every phase; only the rule id and phase differ.
+const reportingMsgTemplate = "inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}"
+
+// reportingRule builds the SecAction that reports the CRS anomaly scores for
+// the given phase, using the id assigned to that phase in reportingRuleIDs.
+func reportingRule(phase int) string {
+	id := reportingRuleIDs[strconv.Itoa(phase)]
+	return fmt.Sprintf("SecAction \"id:%d,phase:%d,pass,t:none,noauditlog,nolog,msg:'%s',tag:'reporting',severity:'NOTICE'\"", id, phase, reportingMsgTemplate)
+}
+
+// getConfigRules returns the WACE directives injected around the OWASP CRS
+// rules.
 func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
-	// Rule format for scores
-	// inbound_blocking_anomaly_score, inbound_detection_anomaly_score, inbound_per_pl_anomaly_score, inbound_anomaly_score_threshold,
-	// outbound_blocking_anomaly_score, outbound_detection_anomaly_score, outbound_per_pl_anomaly_score, outbound_anomaly_score_threshold,
-	// sql_injection_score, xss_score, rfi_score, lfi_score, rce_score, php_injection_score, http_violation_score, session_fixation_score, combined_score
+	if CRSVersion == "" {
+		return []string{}
+	}
 
 	res := []string{}
 
-	switch CRSVersion[:1] {
-	case "2":
-		res = append(res, "SecRuleRemoveById 981175")
-		res = append(res, "SecRuleRemoveById 981176")
-		res = append(res, "SecRuleRemoveById 981200")
-		res = append(res, "SecRule TX:ANOMALY_SCORE \"@gt 0\" \"chain,phase:2,id:'175',t:none,pass,log,msg:'Inbound Attack Targeting OSVDB Flagged Resource.',setvar:tx.inbound_tx_msg=%{tx.msg},setvar:tx.inbound_anomaly_score=%{tx.anomaly_score}\" \n SecRule RESOURCE:OSVDB_VULNERABLE \"@eq 1\" chain \n SecRule TX:ANOMALY_SCORE_BLOCKING \"@streq on\"")
-		res = append(res, "SecRule TX:ANOMALY_SCORE \"@gt 0\" \"chain,phase:2,id:'981176',t:none,pass,log,msg:'Inbound Anomaly Score Exceeded (Total Score: %{TX.ANOMALY_SCORE}, SQLi=%{TX.SQL_INJECTION_SCORE}, XSS=%{TX.XSS_SCORE}): Last Matched Message: %{tx.msg}',logdata:'Last Matched Data: %{matched_var}',setvar:tx.inbound_tx_msg=%{tx.msg},setvar:tx.inbound_anomaly_score=%{tx.anomaly_score}\" \n SecRule TX:ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_level}\" chain \n SecRule TX:ANOMALY_SCORE_BLOCKING \"@streq on\" chain \n SecRule TX:/^\\d+\\-/ \"(.*)\"")
-		res = append(res, "SecRule TX:OUTBOUND_ANOMALY_SCORE \"@ge %{tx.outbound_anomaly_score_level}\" \"chain,phase:4,id:'981200',t:none,pass,msg:'Outbound Anomaly Score Exceeded (score %{TX.OUTBOUND_ANOMALY_SCORE}): Last Matched Message: %{tx.msg}',logdata:'Last Matched Data: %{matched_var}'\" \n SecRule TX:ANOMALY_SCORE_BLOCKING \"@streq on\" chain \n SecRule TX:/^\\d/ \"(.*)\"")
+	res = append(res, "SecRuleUpdateActionById 949111 \"pass\"")
+	res = append(res, "SecRuleUpdateActionById 949110 \"pass\"")
+	res = append(res, "SecRuleUpdateActionById 959101 \"pass\"")
+	res = append(res, "SecRuleUpdateActionById 959100 \"pass\"")
 
-		res = append(res, "SecAction \"id:172,phase:2,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},sql_injection_score=%{tx.sql_injection_score},xss_score=%{tx.xss_score},tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:174,phase:4,pass,t:none,noauditlog,msg:'outbound_blocking=%{tx.blocking_outbound_anomaly_score},sql_injection_score=%{tx.sql_injection_score},xss_score=%{tx.xss_score},tag:'reporting',severity:'NOTICE'\"")
-		return res
-	case "3":
-		res = append(res, "SecRuleRemoveById 949100")
-		// Review this rule
-		res = append(res, "SecRule IP:REPUT_BLOCK_FLAG \"@eq 1\" \"id:100,phase:2,deny,log,msg:'Request Denied by IP Reputation Enforcement',logdata:'Previous Block Reason: %{ip.reput_block_reason}',tag:'application-multi',tag:'language-multi',tag:'platform-multi',tag:'attack-reputation-ip',severity:'CRITICAL',chain \n SecRule TX:DO_REPUT_BLOCK \"@eq 1\" \"setvar:'tx.inbound_anomaly_score=%{tx.anomaly_score}'")
-		res = append(res, "SecRuleRemoveById 949110")
-		res = append(res, "SecRuleRemoveById 959100")
-
-		// TODO: Review presence of Combined Score
-		res = append(res, "SecAction \"id:171,phase:1,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:172,phase:2,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:173,phase:3,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:174,phase:4,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		return res
-	case "4":
-		res = append(res, "SecRuleRemoveById 949110")
-		res = append(res, "SecRuleRemoveById 959100")
-
-		if w.earlyBlocking {
-			res = append(res, "SecAction phase:1,setvar:'tx.early_blocking=1'")
-		}
-
-		res = append(res, "SecAction \"id:171,phase:1,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:172,phase:2,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:173,phase:3,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		res = append(res, "SecAction \"id:174,phase:4,pass,t:none,noauditlog,msg:'inbound_blocking=%{tx.blocking_inbound_anomaly_score},inbound_detection=%{tx.detection_inbound_anomaly_score},inbound_per_pl=%{tx.inbound_anomaly_score_pl1}-%{tx.inbound_anomaly_score_pl2}-%{tx.inbound_anomaly_score_pl3}-%{tx.inbound_anomaly_score_pl4},inbound_threshold=%{tx.inbound_anomaly_score_threshold},outbound_blocking=%{tx.blocking_outbound_anomaly_score},outbound_detection=%{tx.detection_outbound_anomaly_score},outbound_per_pl=%{tx.outbound_anomaly_score_pl1}-%{tx.outbound_anomaly_score_pl2}-%{tx.outbound_anomaly_score_pl3}-%{tx.outbound_anomaly_score_pl4},outbound_threshold=%{tx.outbound_anomaly_score_threshold},SQLI=%{tx.sql_injection_score},XSS=%{tx.xss_score},RFI=%{tx.rfi_score},LFI=%{tx.lfi_score},RCE=%{tx.rce_score},PHPI=%{tx.php_injection_score},HTTP=%{tx.http_violation_score},SESS=%{tx.session_fixation_score},COMBINED_SCORE=%{tx.anomaly_score}',tag:'reporting',severity:'NOTICE'\"")
-		return res
-	default:
-		return []string{}
+	if w.earlyBlocking {
+		res = append(res, "SecAction \"id:9011150,phase:1,setvar:'tx.early_blocking=1'\"")
 	}
+
+	for phase := 1; phase <= 4; phase++ {
+		res = append(res, reportingRule(phase))
+	}
+
+	return res
 }
 
 // NewWAFConfig creates a new WAFConfig with default values
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, "", false}
+	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, "", false, false, false}
 }
 
 // WithDirectivesFromFile implements the function specified in the WAFConfig interface to add directives from a file
@@ -449,6 +439,52 @@ func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 		conf.exceptionsConfig = conf.exceptionsConfig.WithDirectives(rule)
 	}
 	return conf.exceptionsConfig
+}
+
+// reportingRuleIDs maps the processing phase (as used in wafParams) to the id
+// of the reporting SecAction that logs the anomaly scores. These ids must match
+// the SecAction directives injected by getConfigRules.
+var reportingRuleIDs = map[string]int{
+	"1": 9491110,
+	"2": 9491100,
+	"3": 9591010,
+	"4": 9591000,
+}
+
+// parseScoreParams locates the WACE reporting rule for the given phase among the
+// matched rules and parses its message into the score parameters passed to the
+// decision plugin. The matched rules are scanned in reverse because the reporting
+// SecAction is normally the last rule to match in its phase, but this does not
+// rely on it being last: it matches explicitly by rule id.
+//
+// It returns ok == false when the reporting rule is not present. That happens
+// when a disruptive (deny) rule short-circuited the phase before the reporting
+// SecAction could run, in which case Coraza is already blocking the transaction
+// and there is nothing for WACE to evaluate.
+func parseScoreParams(rules []types.MatchedRule, phase string) (map[string]string, bool) {
+	reportID, ok := reportingRuleIDs[phase]
+	if !ok {
+		return nil, false
+	}
+
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].Rule().ID() != reportID {
+			continue
+		}
+
+		wafParams := map[string]string{}
+		for _, score := range strings.Split(rules[i].Message(), ",") {
+			key, value, found := strings.Cut(score, "=")
+			if !found {
+				continue
+			}
+			wafParams[key] = value
+		}
+		wafParams["phase"] = phase
+		return wafParams, true
+	}
+
+	return nil, false
 }
 
 // ParseActiveModels parses the exception rule message to get the active models

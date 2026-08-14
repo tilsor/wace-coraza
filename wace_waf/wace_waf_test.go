@@ -49,7 +49,9 @@ func TestNewWaf(t *testing.T) {
 		gConfig = nil
 		configstore.Clean()
 	}()
-	wafConfig := NewWAFConfig()
+	wafConfig := NewWAFConfig().
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 	_, err := NewWAF(wafConfig)
 	if err != nil {
 		t.Errorf("Error creating WAF: %v", err.Error())
@@ -65,7 +67,9 @@ func TestTransactionAddData(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -121,7 +125,9 @@ func TestTransactionWithIDAddData(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -248,6 +254,8 @@ func TestBlockTransactions(t *testing.T) {
 	}()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
 		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
 
 	waf, err := NewWAF(wafConf)
@@ -311,6 +319,151 @@ func TestBlockTransactions(t *testing.T) {
 	tx.ProcessLogging()
 }
 
+// TestBlockTransactionsBlockingDisabled mirrors TestBlockTransactions with
+// blocking: false in the general config. The anomaly score still crosses the
+// threshold (same directives and models), but the transaction must not be
+// denied: the blocking config flag gates whether WACE's decision actually
+// results in an interruption, independent of the decision plugin's result.
+func TestBlockTransactionsBlockingDisabled(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_block_transaction_blocking_disabled.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Errorf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	if tx == nil {
+		t.Errorf("Error creating transaction")
+	}
+
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	tx.SetServerName("Apache")
+	i := tx.ProcessRequestHeaders()
+	if i != nil {
+		t.Errorf("transaction was blocked but must not be: blocking is disabled")
+	}
+
+	body := "test"
+	reader := strings.NewReader(body)
+	i, count, err := tx.ReadRequestBodyFrom(reader)
+	if err != nil {
+		t.Errorf("Error reading request body: %v", err.Error())
+	}
+	if count != len(body) {
+		t.Errorf("Error reading request body: Expected bytes: %d, Got: %d", len(body), count)
+	}
+	i, err = tx.ProcessRequestBody()
+	if err != nil {
+		t.Errorf("Error processing request body: %v", err.Error())
+	}
+	if i != nil {
+		t.Errorf("transaction was blocked but must not be: blocking is disabled")
+	}
+
+	tx.ProcessLogging()
+}
+
+// TestBlockTransactionsAppConfigOverridesGeneralBlocking verifies that a
+// per-app waceappconfig.yaml's blocking value takes priority over the
+// general config's: LoadConfigYaml (the app-config path) always sets
+// blocking from the app config, never falling back to the general config's
+// value the way LoadConfigFromGeneralConfig does. Here the general config
+// has blocking: false but the app config has blocking: true, so the
+// transaction must still be denied.
+func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_block_transaction_general_no_block.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectivesFromFile("testdata/config/appoverridewaceappconfig.yaml").
+		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	tx.SetServerName("Apache")
+	i := tx.ProcessRequestHeaders()
+	if i == nil {
+		t.Error("transaction was not blocked, but the app config's blocking: true should take priority over the general config's blocking: false")
+	}
+
+	tx.ProcessLogging()
+}
+
+// TestVirtualPatchingWithCRSDisabled verifies that Coraza's own SecLang rules
+// still produce interruptions when CRS is disabled (disable_crs: true skips
+// only the WACE-injected CRS directives from getConfigRules, not Coraza rule
+// evaluation itself). This is the classic virtual-patching use case: a
+// hand-written rule blocking a known-bad request without CRS loaded at all.
+func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWAFConfig().
+		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml").
+		WithDirectives(`SecRule REQUEST_URI "@streq /admin" "id:1000001,phase:1,deny,status:403,msg:'Virtual patch: blocked /admin'"`)
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tests := []struct {
+		name        string
+		uri         string
+		wantBlocked bool
+	}{
+		{name: "matches virtual patch rule", uri: "/admin", wantBlocked: true},
+		{name: "does not match virtual patch rule", uri: "/", wantBlocked: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := waf.NewTransaction()
+			tx.ProcessURI(tt.uri, "GET", "HTTP/1.1")
+			tx.AddRequestHeader("Host", "test")
+			i := tx.ProcessRequestHeaders()
+			if tt.wantBlocked && i == nil {
+				t.Errorf("expected virtual-patch rule to block %q even with CRS disabled", tt.uri)
+			}
+			if !tt.wantBlocked && i != nil {
+				t.Errorf("expected %q to pass through, got interruption: %v", tt.uri, i)
+			}
+			tx.ProcessLogging()
+		})
+	}
+}
+
 func TestExceptions(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
@@ -320,7 +473,10 @@ func TestExceptions(t *testing.T) {
 		configstore.Clean()
 	}()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").WithDirectivesFromFile("testdata/config/waceexceptions.conf")
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectivesFromFile("testdata/config/waceexceptions.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
@@ -395,6 +551,8 @@ func TestTrainingModelNotUsedInDecision(t *testing.T) {
 	// from the decision. trivial (weight=0, attack=0.0) is the only sync model.
 	wafConf := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
 		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=0',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
 
 	waf, err := NewWAF(wafConf)

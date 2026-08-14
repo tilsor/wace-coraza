@@ -27,11 +27,11 @@ decisionplugins:
       waf_weight: "0.5"
       threshold: "0.1"
 
-options:
-  crs_version: "4.4.0-dev"
-  early_blocking: "true"
+crs_version: "4.4.0-dev"
+early_blocking: true
+blocking: true
 
-ruleidsforexceptions:
+exception_ids:
   RequestHeaders: 100
   RequestBody: 200
   AllRequest: 300

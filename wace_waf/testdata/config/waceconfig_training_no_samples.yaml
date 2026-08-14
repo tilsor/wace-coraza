@@ -17,8 +17,7 @@ decisionplugins:
       waf_weight: "0.5"
       threshold: "0.5"
 
-options:
-  crs_version: "4.4.0-dev"
+crs_version: "4.4.0-dev"
 
-ruleidsforexceptions:
+exception_ids:
   RequestHeaders: 100
