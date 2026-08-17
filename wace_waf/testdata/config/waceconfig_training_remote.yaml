@@ -3,9 +3,9 @@
 logpath: "/dev/null"
 loglevel: "WARN"
 
-modelplugins:
+model_plugins:
   - id: "trivial_training"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
     training: true
     remote: true
@@ -13,7 +13,7 @@ modelplugins:
       max_samples: 10
       result_file_path: "/tmp/training_results.json"
 
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
     waf_weight: 0.5

@@ -174,7 +174,7 @@ func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (*WaceModels, strin
 		}
 	}
 
-	for _, dp := range loadedConf.Decisionplugins {
+	for _, dp := range loadedConf.DecisionPlugins {
 		if _, ok := cs.DecisionPlugins[dp.ID]; ok && !cs.DecisionPlugins[dp.ID].Training {
 			return models, dp.ID, nil
 		}

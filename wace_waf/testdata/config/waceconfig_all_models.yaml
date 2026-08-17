@@ -7,33 +7,33 @@ logpath: "/dev/null"
 loglevel: "DEBUG"
 
 #The model plugins configuration
-modelplugins:
+model_plugins:
   - id: "trivialRequestHeaders"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
     mode: sync
   - id: "trivialRequestBody"
-    plugintype: RequestBody
+    plugin_type: RequestBody
     path: "testdata/plugins/trivial.so"
     mode: sync
   - id: "trivialAllRequest"
-    plugintype: AllRequest
+    plugin_type: AllRequest
     path: "testdata/plugins/trivial.so"
     mode: sync
   - id: "trivialResponseHeaders"
-    plugintype: ResponseHeaders
+    plugin_type: ResponseHeaders
     path: "testdata/plugins/trivial.so"
     mode: sync
   - id: "trivialResponseBody"
-    plugintype: ResponseBody
+    plugin_type: ResponseBody
     path: "testdata/plugins/trivial.so"
     mode: sync
   - id: "trivialAllResponse"
-    plugintype: AllResponse
+    plugin_type: AllResponse
     path: "testdata/plugins/trivial.so"
     mode: sync
 
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
     model_weights:

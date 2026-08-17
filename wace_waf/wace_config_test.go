@@ -415,16 +415,16 @@ func TestGeneralConfigLoadConfigTrainingFields(t *testing.T) {
 	config := []byte(`
 logpath: "/dev/null"
 loglevel: "WARN"
-modelplugins:
+model_plugins:
   - id: "model_training"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
     weight: 0.25
     training: true
     training_data:
       max_samples: 50
       result_file_path: "/tmp/training_results.json"
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
 options:
@@ -436,10 +436,10 @@ ruleidsforexceptions:
 	if err != nil {
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
-	if len(confData.Modelplugins) == 0 {
+	if len(confData.ModelPlugins) == 0 {
 		t.Fatal("no model plugins in parsed config")
 	}
-	plugin := confData.Modelplugins[0]
+	plugin := confData.ModelPlugins[0]
 	if !plugin.Training {
 		t.Error("expected Training to be true")
 	}
