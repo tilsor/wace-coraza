@@ -53,3 +53,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	rsc.io/binaryregexp v0.2.0 // indirect
 )
+
+replace github.com/tilsor/ModSecIntl_wace_lib => ../ModSecIntl_wace_lib

@@ -13,20 +13,10 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-var wafWeight float64
 var threshold float64
 
 func InitPlugin(params map[string]string, meter metric.Meter) error {
-	stringWafWeight, ok := params["waf_weight"]
-	if !ok {
-		return fmt.Errorf("waf_weight parameter not found")
-	}
 	var err error
-	wafWeight, err = strconv.ParseFloat(stringWafWeight, 64)
-	if err != nil {
-		return fmt.Errorf("error parsing waf_weight parameter: %v", err)
-	}
-
 	stringThreshold, ok := params["threshold"]
 	if !ok {
 		threshold = 0.5
@@ -47,7 +37,7 @@ func InitPlugin(params map[string]string, meter metric.Meter) error {
 	return nil
 }
 
-func CheckResults(decisionInput waceapi.DecisionInput) (bool, error) {
+func CheckResults(decisionInput waceapi.DecisionInput) (waceapi.DecisionResult, error) {
 	var weightedSum float64 = 0
 	var weightsSum float64 = 0
 	for key, value := range decisionInput.Results {
@@ -55,23 +45,16 @@ func CheckResults(decisionInput waceapi.DecisionInput) (bool, error) {
 		weightsSum += decisionInput.ModelWeight[key]
 	}
 
-	stringInboundBlocking, ok := decisionInput.WAFdata["inbound_blocking"]
+	as, ok := decisionInput.WAFdata.Scores["inbound_blocking"]
 	if !ok {
-		return false, fmt.Errorf("inbound_blocking parameter not found")
+		return waceapi.DecisionResult{}, fmt.Errorf("inbound_blocking score not found")
 	}
-	stringInboundThreshold, ok := decisionInput.WAFdata["inbound_threshold"]
+	it, ok := decisionInput.WAFdata.Scores["inbound_threshold"]
 	if !ok {
-		return false, fmt.Errorf("inbound_threshold parameter not found")
+		return waceapi.DecisionResult{}, fmt.Errorf("inbound_threshold score not found")
 	}
 
-	as, err := strconv.ParseFloat(stringInboundBlocking, 64)
-	if err != nil {
-		return false, fmt.Errorf("error parsing anomaly score: %v", err)
-	}
-	it, err := strconv.ParseFloat(stringInboundThreshold, 64)
-	if err != nil {
-		return false, fmt.Errorf("error parsing anomaly score threshold: %v", err)
-	}
+	wafWeight := decisionInput.WAFWeight
 
 	logger := lg.Get()
 	logger.TPrintf(lg.DEBUG, decisionInput.TransactionId, "weighted_sum | anomaly score: %v anomaly score threshold: %v", as, it)
@@ -86,7 +69,7 @@ func CheckResults(decisionInput waceapi.DecisionInput) (bool, error) {
 	weightedSum /= weightsSum
 
 	logger.TPrintf(lg.DEBUG, decisionInput.TransactionId, "weighted_sum | weighted sum: %v threshold: %v", weightedSum, threshold)
-	return weightedSum > threshold, nil
+	return waceapi.DecisionResult{Block: weightedSum > threshold}, nil
 }
 
 // ReloadPlugin reload the plugin

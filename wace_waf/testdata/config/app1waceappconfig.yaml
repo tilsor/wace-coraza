@@ -1,5 +1,5 @@
-modelids: ["trivial"]
+model_ids: ["trivial"]
 
-decisionid: "weighted_sum"
+decision_ids: ["weighted_sum"]
 
 app_name: "Application 1"

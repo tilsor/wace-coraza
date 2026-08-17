@@ -11,19 +11,20 @@ modelplugins:
   - id: "trivial"
     plugintype: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0.25
     mode: sync
   - id: "trivial2"
     plugintype: RequestBody
     path: "testdata/plugins/trivial2.so"
-    weight: 0.25
     mode: sync
 
 decisionplugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
+    model_weights:
+      trivial: 0.25
+      trivial2: 0.25
+    waf_weight: 0.5
     params:
-      waf_weight: "0.5"
       threshold: "0.5"
 
 otel_url: "localhost:4317"

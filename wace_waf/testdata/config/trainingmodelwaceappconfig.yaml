@@ -1,0 +1,5 @@
+model_ids: ["trivial_training"]
+
+decision_ids: ["weighted_sum"]
+
+app_name: "Training Model App"
