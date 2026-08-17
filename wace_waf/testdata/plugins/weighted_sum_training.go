@@ -69,7 +69,7 @@ func CheckResults(decisionInput waceapi.DecisionInput) (waceapi.DecisionResult, 
 	weightedSum /= weightsSum
 
 	logger.TPrintf(lg.DEBUG, decisionInput.TransactionId, "weighted_sum | weighted sum: %v threshold: %v", weightedSum, threshold)
-	return waceapi.DecisionResult{Block: weightedSum > threshold}, nil
+	return waceapi.DecisionResult{Block: weightedSum > threshold, Data: decisionInput.WAFdata}, nil
 }
 
 // ReloadPlugin reload the plugin

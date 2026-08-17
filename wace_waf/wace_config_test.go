@@ -24,18 +24,27 @@ type testRuleMetadata struct {
 func (r testRuleMetadata) ID() int { return r.id }
 
 // testMatchedRule is a minimal types.MatchedRule for tests, exposing only the
-// rule id and the (already macro-expanded) message read by parseScoreParams.
+// rule id, the (already macro-expanded) message read by parseScoreParams, and
+// the matched data count read by processMatchedRules.
 type testMatchedRule struct {
 	types.MatchedRule
-	id      int
-	message string
+	id           int
+	message      string
+	matchedDatas int
 }
 
 func (m testMatchedRule) Rule() types.RuleMetadata { return testRuleMetadata{id: m.id} }
 func (m testMatchedRule) Message() string          { return m.message }
+func (m testMatchedRule) MatchedDatas() []types.MatchData {
+	return make([]types.MatchData, m.matchedDatas)
+}
 
 func matchedRule(id int, message string) types.MatchedRule {
 	return testMatchedRule{id: id, message: message}
+}
+
+func matchedRuleWithDataCount(id int, matchedDatas int) types.MatchedRule {
+	return testMatchedRule{id: id, matchedDatas: matchedDatas}
 }
 
 func TestGetConfigRules(t *testing.T) {
@@ -227,8 +236,8 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 		t.Fatalf("Error loading waceappconfig: %v", err)
 	}
 
-	if wConfig.waceDecisionId == "" {
-		t.Error("Decision Plugin Id was not loaded properly")
+	if len(wConfig.waceDecisionIds) == 0 {
+		t.Error("Decision Plugin Ids were not loaded properly")
 	}
 
 	if len(wConfig.waceModels.reqHeadModelIDs) == 0 {
@@ -284,7 +293,7 @@ func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
 		earlyBlocking: true,
 		blocking:      true,
 		waceModels:    &WaceModels{},
-		waceDecisions: []string{"weighted_sum"},
+		waceDecision:  "weighted_sum",
 	}
 	defer func() { gConfig = nil }()
 
@@ -297,8 +306,8 @@ func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
 	if !w.earlyBlocking {
 		t.Error("expected earlyBlocking to be propagated from general config, got false")
 	}
-	if w.waceDecisionId != "weighted_sum" {
-		t.Errorf("expected waceDecisionId %q, got %q", "weighted_sum", w.waceDecisionId)
+	if !reflect.DeepEqual(w.waceDecisionIds, []string{"weighted_sum"}) {
+		t.Errorf("expected waceDecisionIds %q, got %q", []string{"weighted_sum"}, w.waceDecisionIds)
 	}
 }
 
@@ -385,7 +394,7 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		"trivialResponseBody",
 		"trivialAllResponse",
 	}
-	results, err := NewWaceModelsConfig(models)
+	results, decisionIds, err := newWacePluginsConfig(models, []string{"weighted_sum"})
 
 	if err != nil {
 		t.Errorf("Error creating new models config: %s", err.Error())
@@ -394,6 +403,11 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 	if !reflect.DeepEqual(results, expected) {
 		t.Errorf("Error: models do not match expected %v, got %v", expected, results)
 	}
+
+	expectedDecisionIds := []string{"weighted_sum"}
+	if !reflect.DeepEqual(decisionIds, expectedDecisionIds) {
+		t.Errorf("Error: decision ids do not match expected %v, got %v", expectedDecisionIds, decisionIds)
+	}
 }
 
 func TestGeneralConfigLoadConfigTrainingFields(t *testing.T) {
@@ -401,16 +415,16 @@ func TestGeneralConfigLoadConfigTrainingFields(t *testing.T) {
 	config := []byte(`
 logpath: "/dev/null"
 loglevel: "WARN"
-modelplugins:
+model_plugins:
   - id: "model_training"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
     weight: 0.25
     training: true
     training_data:
       max_samples: 50
       result_file_path: "/tmp/training_results.json"
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
 options:
@@ -422,10 +436,10 @@ ruleidsforexceptions:
 	if err != nil {
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
-	if len(confData.Modelplugins) == 0 {
+	if len(confData.ModelPlugins) == 0 {
 		t.Fatal("no model plugins in parsed config")
 	}
-	plugin := confData.Modelplugins[0]
+	plugin := confData.ModelPlugins[0]
 	if !plugin.Training {
 		t.Error("expected Training to be true")
 	}
@@ -437,6 +451,11 @@ ruleidsforexceptions:
 	}
 }
 
+// TestNewWAFWithTrainingModel verifies that a training model, while excluded
+// from the general config's default model set (getDefaultPlugins only selects
+// non-training plugins, since apps that don't opt in via their own
+// waceappconfig.yaml should not silently start collecting training data),
+// is still loaded when an app explicitly lists it in model_ids.
 func TestNewWAFWithTrainingModel(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_training_valid.yaml"
 	gConfig = nil
@@ -448,16 +467,20 @@ func TestNewWAFWithTrainingModel(t *testing.T) {
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("../coreruleset/rules/*.conf")
-	_, err := NewWAF(wafConfig)
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectivesFromFile("testdata/config/trainingmodelwaceappconfig.yaml")
+	waf, err := NewWAF(wafConfig)
 	if err != nil {
 		t.Fatalf("expected no error for valid training model config, got: %v", err)
 	}
 	if gConfig.waceModels == nil {
 		t.Fatal("waceModels is nil after loading training config")
 	}
-	if len(gConfig.waceModels.reqHeadModelIDs) == 0 {
-		t.Error("expected training model to be present in reqHeadModelIDs")
+	if len(gConfig.waceModels.reqHeadModelIDs) != 0 {
+		t.Errorf("expected the training model to be excluded from the general config's default models, got %v", gConfig.waceModels.reqHeadModelIDs)
+	}
+	if len(waf.waceWafConfig.waceModels.reqHeadModelIDs) == 0 {
+		t.Error("expected training model to be present in reqHeadModelIDs when opted in via the app config")
 	}
 }
 
@@ -501,7 +524,10 @@ func TestNewWAFWithInvalidTrainingConfig(t *testing.T) {
 
 func TestParseScoreParams(t *testing.T) {
 	// A well-formed phase-2 reporting message as emitted (after macro
-	// expansion) by the id:172 SecAction from getConfigRules.
+	// expansion) by the id:172 SecAction from getConfigRules. inbound_per_pl
+	// is a dash-joined composite (e.g. "1-2-3-4"), not a single number, so it
+	// can never be represented in the map[string]float64 result and is
+	// dropped rather than surfaced as a parse error.
 	report172 := "inbound_blocking=10,inbound_per_pl=1-2-3-4,SQLI=5,XSS=0,COMBINED_SCORE=15"
 
 	tests := []struct {
@@ -509,16 +535,16 @@ func TestParseScoreParams(t *testing.T) {
 		rules    []types.MatchedRule
 		phase    string
 		wantOK   bool
-		wantVals map[string]string
+		wantVals map[string]float64
 	}{
 		{
 			name:   "reporting rule present as last match",
 			rules:  []types.MatchedRule{matchedRule(942100, "SQL Injection Attack Detected"), matchedRule(reportingRuleIDs["2"], report172)},
 			phase:  "2",
 			wantOK: true,
-			wantVals: map[string]string{
-				"inbound_blocking": "10", "inbound_per_pl": "1-2-3-4",
-				"SQLI": "5", "XSS": "0", "COMBINED_SCORE": "15", "phase": "2",
+			wantVals: map[string]float64{
+				"inbound_blocking": 10,
+				"SQLI":             5, "XSS": 0, "COMBINED_SCORE": 15, "phase": 2,
 			},
 		},
 		{
@@ -528,9 +554,9 @@ func TestParseScoreParams(t *testing.T) {
 			rules:  []types.MatchedRule{matchedRule(reportingRuleIDs["2"], report172), matchedRule(949110, "Inbound Anomaly Score Exceeded")},
 			phase:  "2",
 			wantOK: true,
-			wantVals: map[string]string{
-				"inbound_blocking": "10", "inbound_per_pl": "1-2-3-4",
-				"SQLI": "5", "XSS": "0", "COMBINED_SCORE": "15", "phase": "2",
+			wantVals: map[string]float64{
+				"inbound_blocking": 10,
+				"SQLI":             5, "XSS": 0, "COMBINED_SCORE": 15, "phase": 2,
 			},
 		},
 		{
@@ -555,19 +581,21 @@ func TestParseScoreParams(t *testing.T) {
 			rules:  []types.MatchedRule{matchedRule(reportingRuleIDs["2"], "inbound_blocking=10,tag:reporting,SQLI=5")},
 			phase:  "2",
 			wantOK: true,
-			wantVals: map[string]string{
-				"inbound_blocking": "10", "SQLI": "5", "phase": "2",
+			wantVals: map[string]float64{
+				"inbound_blocking": 10, "SQLI": 5, "phase": 2,
 			},
 		},
 		{
 			// Correct reporting rule is selected per phase even when several
-			// reporting SecActions are present in the matched set.
+			// reporting SecActions are present in the matched set. phaseflag is a
+			// non-numeric fragment (mirroring inbound_per_pl above) and so is
+			// dropped; inbound_blocking still round-trips as a float.
 			name:   "picks reporting rule matching the phase",
 			rules:  []types.MatchedRule{matchedRule(reportingRuleIDs["1"], "inbound_blocking=1,phaseflag=one"), matchedRule(reportingRuleIDs["2"], report172)},
 			phase:  "1",
 			wantOK: true,
-			wantVals: map[string]string{
-				"inbound_blocking": "1", "phaseflag": "one", "phase": "1",
+			wantVals: map[string]float64{
+				"inbound_blocking": 1, "phase": 1,
 			},
 		},
 		{
@@ -592,6 +620,58 @@ func TestParseScoreParams(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.wantVals) {
 				t.Errorf("params mismatch:\n got:  %v\n want: %v", got, tt.wantVals)
+			}
+		})
+	}
+}
+
+func TestProcessMatchedRules(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []types.MatchedRule
+		want  map[int]int
+	}{
+		{
+			name:  "no matched rules",
+			rules: []types.MatchedRule{},
+			want:  map[int]int{},
+		},
+		{
+			name:  "single rule with a single matched variable",
+			rules: []types.MatchedRule{matchedRuleWithDataCount(942100, 1)},
+			want:  map[int]int{942100: 1},
+		},
+		{
+			name: "single rule matching several variables at once",
+			// e.g. a rule targeting ARGS that matches more than one parameter.
+			rules: []types.MatchedRule{matchedRuleWithDataCount(942100, 3)},
+			want:  map[int]int{942100: 3},
+		},
+		{
+			name: "several distinct rules",
+			rules: []types.MatchedRule{
+				matchedRuleWithDataCount(942100, 1),
+				matchedRuleWithDataCount(949110, 1),
+				matchedRuleWithDataCount(200002, 2),
+			},
+			want: map[int]int{942100: 1, 949110: 1, 200002: 2},
+		},
+		{
+			// A rule can match (and thus appear in the matched rules) without
+			// any MatchedData, e.g. a chain's last rule with no operator of
+			// its own. Its entry must still be present in the result, with a
+			// count of 0, rather than being omitted.
+			name:  "rule with no matched data",
+			rules: []types.MatchedRule{matchedRuleWithDataCount(942100, 0)},
+			want:  map[int]int{942100: 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := processMatchedRules(tt.rules)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("processMatchedRules() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -14,7 +14,7 @@ This section provides details on each field within the configuration files and t
 - loglevel (String): Sets the log level for the application. Possible values include DEBUG, INFO, WARN or ERROR.
 
 **Plugins configuration**
-- modelplugins: Defines the plugins used for processing transactions.
+- model_plugins: Defines the plugins used for processing transactions.
   - id (String): a unique identifier for each model plugin.
   - plugintype (String): Specifies the plugin type. Possible values include "RequestHeaders", "RequestBody", "AllRequest", "ResponseHeaders", "ResponseBody", and "AllResponse".
   - path (String): file path to the plugin executable file.
@@ -22,7 +22,7 @@ This section provides details on each field within the configuration files and t
   - mode (String): execution mode, values can be "sync" or "async".
   - remote (Boolean): indicates whether the plugin is executed through NATS.
 
-- decisionplugins: contains plugins used to determine final actions based on model plugin outputs.
+- decision_plugins: contains plugins used to determine final actions based on model plugin outputs.
   - id (String): identifier for each decision plugin.
   - path (String): file path to the plugin executable file.
   - params: Contains parameters for decision-making logic.

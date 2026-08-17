@@ -105,6 +105,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 			return nil, fmt.Errorf("Error loading general config: %v", err)
 		}
 		h := dataHash(data)
+		// Check for changes on default config
 		if h != gConfig.hash {
 			confData, err := newGC.LoadConfig(data)
 			if err != nil {
@@ -307,10 +308,16 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
-		if wafParams, ok := parseScoreParams(t.MatchedRules(), "1"); ok {
-			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
+		if wafScores, ok := parseScoreParams(t.MatchedRules(), "1"); ok {
+			wafParams := waceapi.WAFData{
+				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
+			}
+			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
-			if err == nil {
+			if !found {
+				t.waf.logger.TPrintf(lg.ERROR, t.Transaction.ID(), "Non-training decision plugin not found for ids %s", t.waf.waceWafConfig.waceDecisionIds)
+			} else if err == nil {
 				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 					interruption = &types.Interruption{Action: "deny"}
@@ -392,6 +399,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				// }
 			}
 
+			i = len(t.exceptionTransaction.MatchedRules()) - 1
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestBody"] {
 				i--
 			}
@@ -454,19 +462,25 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if interruption == nil {
-		if wafParams, ok := parseScoreParams(t.MatchedRules(), "2"); ok {
-			result, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
+		if wafScores, ok := parseScoreParams(t.MatchedRules(), "2"); ok {
+			wafParams := waceapi.WAFData{
+				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
+			}
+			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
-			if err2 == nil {
-				if result && t.waf.waceWafConfig.blocking {
+			if !found {
+				t.waf.logger.TPrintf(lg.ERROR, t.Transaction.ID(), "Non-training decision plugin not found for ids %s", t.waf.waceWafConfig.waceDecisionIds)
+			} else if err == nil {
+				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 					interruption = &types.Interruption{Action: "deny"}
 					t.httpPayload.ResponseCode = 403
 
-					blocked, err2 := meter.Int64Counter("http.client.request.blockedp2.total")
-					if err2 != nil {
-						panic(err2)
+					blocked, err := meter.Int64Counter("http.client.request.blockedp2.total")
+					if err != nil {
+						panic(err)
 					}
 					blocked.Add(ctx, 1)
 				}
@@ -550,10 +564,16 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
-		if wafParams, ok := parseScoreParams(t.MatchedRules(), "3"); ok {
-			res, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
+		if wafScores, ok := parseScoreParams(t.MatchedRules(), "3"); ok {
+			wafParams := waceapi.WAFData{
+				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
+			}
+			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
-			if err == nil {
+			if !found {
+				t.waf.logger.TPrintf(lg.ERROR, t.Transaction.ID(), "Non-training decision plugin not found for ids %s", t.waf.waceWafConfig.waceDecisionIds)
+			} else if err == nil {
 				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
@@ -629,6 +649,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 				// }
 			}
 
+			i = len(t.exceptionTransaction.MatchedRules()) - 1
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseBody"] {
 				i--
 			}
@@ -682,18 +703,24 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if interruption == nil {
-		if wafParams, ok := parseScoreParams(t.MatchedRules(), "4"); ok {
-			res, err2 := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionId, wafParams)
+		if wafScores, ok := parseScoreParams(t.MatchedRules(), "4"); ok {
+			wafParams := waceapi.WAFData{
+				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
+			}
+			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
-			if err2 == nil {
+			if !found {
+				t.waf.logger.TPrintf(lg.ERROR, t.Transaction.ID(), "Non-training decision plugin not found for ids %s", t.waf.waceWafConfig.waceDecisionIds)
+			} else if err == nil {
 				if res && t.waf.waceWafConfig.blocking {
 					t.waf.logger.TPrintln(lg.DEBUG, t.Transaction.ID(), "Transaction blocked")
 
 					interruption = &types.Interruption{Action: "deny"}
 
-					blocked, err2 := meter.Int64Counter("http.client.request.blockedp4.total")
-					if err2 != nil {
-						panic(err2)
+					blocked, err := meter.Int64Counter("http.client.request.blockedp4.total")
+					if err != nil {
+						panic(err)
 					}
 					blocked.Add(ctx, 1)
 				}

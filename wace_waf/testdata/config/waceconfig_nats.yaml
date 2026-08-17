@@ -7,25 +7,26 @@ logpath: "/dev/null"
 loglevel: "WARN"
 
 #The model plugins configuration
-modelplugins:
+model_plugins:
   - id: "trivial"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0.25
     mode: sync
     remote: true
   - id: "trivial2"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial2.so"
-    weight: 0.25
     mode: sync
     remote: true
 
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
+    model_weights:
+      trivial: 0.25
+      trivial2: 0.25
+    waf_weight: 0.5
     params:
-      waf_weight: "0.5"
       threshold: "0.5"
 
 natsurl: "localhost:4222"

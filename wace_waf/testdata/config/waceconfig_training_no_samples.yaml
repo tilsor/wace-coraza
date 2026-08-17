@@ -3,18 +3,17 @@
 logpath: "/dev/null"
 loglevel: "WARN"
 
-modelplugins:
+model_plugins:
   - id: "trivial_training"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0.25
     training: true
 
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
+    waf_weight: 0.5
     params:
-      waf_weight: "0.5"
       threshold: "0.5"
 
 crs_version: "4.4.0-dev"

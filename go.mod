@@ -7,7 +7,7 @@ require github.com/corazawaf/coraza/v3 v3.7.0
 require (
 	github.com/magefile/mage v1.17.2
 	github.com/tilsor/ModSecIntl_logging v1.0.1
-	github.com/tilsor/ModSecIntl_wace_lib v1.0.2-0.20260724141657-7199d0ed2a44
+	github.com/tilsor/ModSecIntl_wace_lib v1.0.2
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
 	go.opentelemetry.io/otel/metric v1.43.0

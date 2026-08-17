@@ -1,6 +1,6 @@
-modelids: ["trivial", "trivial2"]
+model_ids: ["trivial", "trivial2"]
 
-decisionid: "weighted_sum"
+decision_ids: ["weighted_sum"]
 
 early_blocking: true
 blocking: true

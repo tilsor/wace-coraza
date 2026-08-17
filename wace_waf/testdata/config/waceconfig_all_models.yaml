@@ -7,43 +7,44 @@ logpath: "/dev/null"
 loglevel: "DEBUG"
 
 #The model plugins configuration
-modelplugins:
+model_plugins:
   - id: "trivialRequestHeaders"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0.1
     mode: sync
   - id: "trivialRequestBody"
-    plugintype: RequestBody
+    plugin_type: RequestBody
     path: "testdata/plugins/trivial.so"
-    weight: 0.1
     mode: sync
   - id: "trivialAllRequest"
-    plugintype: AllRequest
+    plugin_type: AllRequest
     path: "testdata/plugins/trivial.so"
-    weight: 0.1
     mode: sync
   - id: "trivialResponseHeaders"
-    plugintype: ResponseHeaders
+    plugin_type: ResponseHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0.1
     mode: sync
   - id: "trivialResponseBody"
-    plugintype: ResponseBody
+    plugin_type: ResponseBody
     path: "testdata/plugins/trivial.so"
-    weight: 0.1
     mode: sync
   - id: "trivialAllResponse"
-    plugintype: AllResponse
+    plugin_type: AllResponse
     path: "testdata/plugins/trivial.so"
-    weight: 0.1
     mode: sync
 
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
+    model_weights:
+      trivialRequestHeaders: 0.1
+      trivialRequestBody: 0.1
+      trivialAllRequest: 0.1
+      trivialResponseHeaders: 0.1
+      trivialResponseBody: 0.1
+      trivialAllResponse: 0.1
+    waf_weight: 0.5
     params:
-      waf_weight: "0.5"
       threshold: "0.5"
 
 otel_url: "localhost:4317"

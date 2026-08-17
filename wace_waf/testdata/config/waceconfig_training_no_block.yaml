@@ -6,25 +6,26 @@
 logpath: "/dev/null"
 loglevel: "DEBUG"
 
-modelplugins:
+model_plugins:
   - id: "trivial"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0
   - id: "trivial2"
-    plugintype: RequestHeaders
+    plugin_type: RequestHeaders
     path: "testdata/plugins/trivial2.so"
-    weight: 1
     training: true
     training_data:
       max_samples: 10
       result_file_path: "/tmp/training_results.json"
 
-decisionplugins:
+decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
+    model_weights:
+      trivial: 0
+      trivial2: 1
+    waf_weight: 0.5
     params:
-      waf_weight: "0.5"
       threshold: "0.1"
 
 crs_version: "4.4.0-dev"

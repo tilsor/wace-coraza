@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -21,7 +20,7 @@ import (
 type generalConfig struct {
 	otelURL              string
 	waceModels           *WaceModels
-	waceDecisions        []string
+	waceDecision         string
 	earlyBlocking        bool
 	crsVersion           string
 	blocking             bool
@@ -36,7 +35,7 @@ type waceWAFConfig struct {
 	waceAppConfigFilePath string
 	exceptionsFilePath    string
 	waceModels            *WaceModels
-	waceDecisionId        string
+	waceDecisionIds       []string
 	earlyBlocking         bool
 	disableCRS            bool
 	blocking              bool
@@ -64,8 +63,8 @@ type waceGeneralConfigFileData struct {
 
 // WaceAppConfigFileData holds the application configuration data from the config file
 type WaceAppConfigFileData struct {
-	ModelIds      []string `yaml:"modelids"`
-	DecisionId    string   `yaml:"decisionid"`
+	ModelIds      []string `yaml:"model_ids"`
+	DecisionIds   []string `yaml:"decision_ids"`
 	EarlyBlocking bool     `yaml:"early_blocking"`
 	DisableCRS    bool     `yaml:"disable_crs"`
 	Blocking      bool     `yaml:"blocking"`
@@ -100,6 +99,15 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	return confData, err
 }
 
+// LoadConfig loads the configuration from the config file to memory
+func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
+	var file, err = os.ReadFile(configFilePath)
+	if err != nil {
+		return err
+	}
+	return w.LoadConfigYaml(file)
+}
+
 // LoadConfigYaml loads the application configuration from the config file to memory
 func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	var conf WaceAppConfigFileData
@@ -113,26 +121,15 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 	w.earlyBlocking = conf.EarlyBlocking
 	w.blocking = conf.Blocking
 
-	w.waceModels, err = NewWaceModelsConfig(conf.ModelIds)
+	w.waceModels, w.waceDecisionIds, err = newWacePluginsConfig(conf.ModelIds, conf.DecisionIds)
 	if err != nil {
 		return err
 	}
-	if slices.Contains(gConfig.waceDecisions, conf.DecisionId) {
-		w.waceDecisionId = conf.DecisionId
-	} else {
-		return fmt.Errorf("Decision id %s does not exist in general configuration file or it wasn't loaded properly", conf.DecisionId)
+	if len(w.waceDecisionIds) == 0 {
+		return fmt.Errorf("Decision ids %s do not exist in general configuration file or they weren't loaded properly", conf.DecisionIds)
 	}
 
 	return nil
-}
-
-// LoadConfig loads the configuration from the config file to memory
-func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
-	var file, err = os.ReadFile(configFilePath)
-	if err != nil {
-		return err
-	}
-	return w.LoadConfigYaml(file)
 }
 
 // LoadConfigFromGeneralConfig loads the application configuration from the general configuration
@@ -142,14 +139,14 @@ func (w *waceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.earlyBlocking = gConfig.earlyBlocking
 	w.blocking = g.blocking
 	w.waceModels = g.waceModels
-	w.waceDecisionId = g.waceDecisions[0]
+	w.waceDecisionIds = []string{g.waceDecision}
 }
 
-// getDefaultPlugins gets the list of plugin IDs from WACE ConfigStore after they were validated
-func getDefaultPlugins() (*WaceModels, map[string]struct{}, error) {
+// getDefaultPlugins gets the list of non-training plugin IDs from WACE ConfigStore after they were validated
+func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (*WaceModels, string, error) {
 	cs, err := cf.Get()
 	if err != nil {
-		return &WaceModels{}, nil, err
+		return &WaceModels{}, "", err
 	}
 	models := &WaceModels{}
 	models.reqHeadModelIDs = []string{}
@@ -159,57 +156,57 @@ func getDefaultPlugins() (*WaceModels, map[string]struct{}, error) {
 	models.respBodyModelIDs = []string{}
 	models.respModelIDs = []string{}
 	for _, model := range cs.ModelPlugins {
-		switch model.PluginType {
-		case cf.RequestHeaders:
-			models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
-		case cf.RequestBody:
-			models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
-		case cf.AllRequest:
-			models.reqModelIDs = append(models.reqModelIDs, model.ID)
-		case cf.ResponseHeaders:
-			models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
-		case cf.ResponseBody:
-			models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
-		case cf.AllResponse:
-			models.respModelIDs = append(models.respModelIDs, model.ID)
+		if !model.Training {
+			switch model.PluginType {
+			case cf.RequestHeaders:
+				models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
+			case cf.RequestBody:
+				models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
+			case cf.AllRequest:
+				models.reqModelIDs = append(models.reqModelIDs, model.ID)
+			case cf.ResponseHeaders:
+				models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
+			case cf.ResponseBody:
+				models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
+			case cf.AllResponse:
+				models.respModelIDs = append(models.respModelIDs, model.ID)
+			}
 		}
 	}
 
-	decisionIDs := make(map[string]struct{})
-	for id := range cs.DecisionPlugins {
-		decisionIDs[id] = struct{}{}
+	for _, dp := range loadedConf.DecisionPlugins {
+		if _, ok := cs.DecisionPlugins[dp.ID]; ok && !cs.DecisionPlugins[dp.ID].Training {
+			return models, dp.ID, nil
+		}
 	}
 
-	return models, decisionIDs, nil
+	return models, "", nil
 }
 
 func (g *generalConfig) setDefaultPlugins(loadedConf waceGeneralConfigFileData) error {
-	models, decisions, err := getDefaultPlugins()
+	models, decision, err := getDefaultPlugins(loadedConf)
 	if err != nil {
 		return err
 	}
 
 	g.waceModels = models
 
-	if len(decisions) == 0 {
+	if decision == "" {
 		return fmt.Errorf("There are no decision plugins available")
 	}
 
-	for _, decisionPlugin := range loadedConf.Decisionplugins {
-		if _, ok := decisions[decisionPlugin.ID]; ok {
-			g.waceDecisions = append(g.waceDecisions, decisionPlugin.ID)
-		}
-	}
+	g.waceDecision = decision
 
 	return nil
 }
 
-// NewWaceModelsConfig creates a new WaceModels with the models with the given ids
+// newWacePluginsConfig creates a new WaceModels with the models with the given ids
 // using the models stored in the WACE ConfigStore
-func NewWaceModelsConfig(modelsIds []string) (*WaceModels, error) {
+// TODO: improve error reporting for unknown models
+func newWacePluginsConfig(modelsIds []string, decisionIds []string) (*WaceModels, []string, error) {
 	cs, err := cf.Get()
 	if err != nil {
-		return &WaceModels{}, err
+		return &WaceModels{}, []string{}, err
 	}
 	models := &WaceModels{}
 	models.reqHeadModelIDs = []string{}
@@ -218,23 +215,32 @@ func NewWaceModelsConfig(modelsIds []string) (*WaceModels, error) {
 	models.respHeadModelIDs = []string{}
 	models.respBodyModelIDs = []string{}
 	models.respModelIDs = []string{}
-	for _, model := range cs.ModelPlugins {
-		switch model.PluginType {
-		case cf.RequestHeaders:
-			models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
-		case cf.RequestBody:
-			models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
-		case cf.AllRequest:
-			models.reqModelIDs = append(models.reqModelIDs, model.ID)
-		case cf.ResponseHeaders:
-			models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
-		case cf.ResponseBody:
-			models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
-		case cf.AllResponse:
-			models.respModelIDs = append(models.respModelIDs, model.ID)
+	for _, id := range modelsIds {
+		if model, ok := cs.ModelPlugins[id]; ok {
+			switch model.PluginType {
+			case cf.RequestHeaders:
+				models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
+			case cf.RequestBody:
+				models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
+			case cf.AllRequest:
+				models.reqModelIDs = append(models.reqModelIDs, model.ID)
+			case cf.ResponseHeaders:
+				models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
+			case cf.ResponseBody:
+				models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
+			case cf.AllResponse:
+				models.respModelIDs = append(models.respModelIDs, model.ID)
+			}
 		}
 	}
-	return models, nil
+
+	checkedDecisionIds := []string{}
+	for _, id := range decisionIds {
+		if _, ok := cs.DecisionPlugins[id]; ok {
+			checkedDecisionIds = append(checkedDecisionIds, id)
+		}
+	}
+	return models, checkedDecisionIds, nil
 }
 
 // reportingMsgTemplate is the msg of the SecAction that reports, per phase,
@@ -277,7 +283,7 @@ func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 
 // NewWAFConfig creates a new WAFConfig with default values
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, "", false, false, false}
+	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, nil, false, false, false}
 }
 
 // WithDirectivesFromFile implements the function specified in the WAFConfig interface to add directives from a file
@@ -461,7 +467,7 @@ var reportingRuleIDs = map[string]int{
 // when a disruptive (deny) rule short-circuited the phase before the reporting
 // SecAction could run, in which case Coraza is already blocking the transaction
 // and there is nothing for WACE to evaluate.
-func parseScoreParams(rules []types.MatchedRule, phase string) (map[string]string, bool) {
+func parseScoreParams(rules []types.MatchedRule, phase string) (map[string]float64, bool) {
 	reportID, ok := reportingRuleIDs[phase]
 	if !ok {
 		return nil, false
@@ -472,19 +478,36 @@ func parseScoreParams(rules []types.MatchedRule, phase string) (map[string]strin
 			continue
 		}
 
-		wafParams := map[string]string{}
+		wafParams := map[string]float64{}
 		for _, score := range strings.Split(rules[i].Message(), ",") {
 			key, value, found := strings.Cut(score, "=")
 			if !found {
 				continue
 			}
-			wafParams[key] = value
+			fValue, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				continue
+			}
+			wafParams[key] = fValue
 		}
-		wafParams["phase"] = phase
+		fphase, err := strconv.ParseFloat(phase, 64)
+		if err != nil {
+			continue
+		}
+		wafParams["phase"] = fphase
 		return wafParams, true
 	}
 
 	return nil, false
+}
+
+func processMatchedRules(rules []types.MatchedRule) map[int]int {
+	result := make(map[int]int)
+	for _, r := range rules {
+		result[r.Rule().ID()] = len(r.MatchedDatas())
+	}
+
+	return result
 }
 
 // ParseActiveModels parses the exception rule message to get the active models
