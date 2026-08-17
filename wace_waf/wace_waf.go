@@ -311,6 +311,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		if wafScores, ok := parseScoreParams(t.MatchedRules(), "1"); ok {
 			wafParams := waceapi.WAFData{
 				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
 			}
 			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
@@ -398,6 +399,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 				// }
 			}
 
+			i = len(t.exceptionTransaction.MatchedRules()) - 1
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestBody"] {
 				i--
 			}
@@ -463,6 +465,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		if wafScores, ok := parseScoreParams(t.MatchedRules(), "2"); ok {
 			wafParams := waceapi.WAFData{
 				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
 			}
 			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
@@ -564,6 +567,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		if wafScores, ok := parseScoreParams(t.MatchedRules(), "3"); ok {
 			wafParams := waceapi.WAFData{
 				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
 			}
 			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 
@@ -645,6 +649,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 				// }
 			}
 
+			i = len(t.exceptionTransaction.MatchedRules()) - 1
 			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseBody"] {
 				i--
 			}
@@ -701,6 +706,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		if wafScores, ok := parseScoreParams(t.MatchedRules(), "4"); ok {
 			wafParams := waceapi.WAFData{
 				Scores: wafScores,
+				Rules:  processMatchedRules(t.MatchedRules()),
 			}
 			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
 

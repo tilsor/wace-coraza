@@ -11,24 +11,34 @@ modelplugins:
   - id: "trivial"
     plugintype: RequestHeaders
     path: "wace_waf/testdata/plugins/trivial.so"
-    weight: 0.25
     mode: sync
   - id: "trivial2"
-    plugintype: RequestHeaders
+    plugintype: RequestBody
     path: "wace_waf/testdata/plugins/trivial2.so"
-    weight: 0.25
     mode: sync
-
+    
 decisionplugins:
   - id: "weighted_sum"
     path: "wace_waf/testdata/plugins/weighted_sum.so"
+    model_weights:
+      trivial: 0.25
+      trivial2: 0.25
+    waf_weight: 0.5
     params:
-      waf_weight: "0.5"
       threshold: "0.5"
+  - id: "weighted_sum_training"
+    path: "wace_waf/testdata/plugins/weighted_sum_training.so"
+    model_weights:
+      trivial: 0.25
+      trivial2: 0.25
+    waf_weight: 0.5
+    params:
+      threshold: "0.5"
+    training: true
+    training_data:
+      max_samples: 10
+      result_file_path: "/tmp/training_results.ndjson"
 
-natsurl: "localhost:4222"
-
-# otel_url: "localhost:4317"
 crs_version: "4.4.0-dev"
 early_blocking: false
 blocking: false

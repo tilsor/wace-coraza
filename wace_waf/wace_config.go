@@ -501,6 +501,15 @@ func parseScoreParams(rules []types.MatchedRule, phase string) (map[string]float
 	return nil, false
 }
 
+func processMatchedRules(rules []types.MatchedRule) map[int]int {
+	result := make(map[int]int)
+	for _, r := range rules {
+		result[r.Rule().ID()] = len(r.MatchedDatas())
+	}
+
+	return result
+}
+
 // ParseActiveModels parses the exception rule message to get the active models
 func ParseActiveModels(exceptionRuleMessage string) []string {
 	models := strings.Split(exceptionRuleMessage, ",")

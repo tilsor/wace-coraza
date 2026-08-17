@@ -24,18 +24,27 @@ type testRuleMetadata struct {
 func (r testRuleMetadata) ID() int { return r.id }
 
 // testMatchedRule is a minimal types.MatchedRule for tests, exposing only the
-// rule id and the (already macro-expanded) message read by parseScoreParams.
+// rule id, the (already macro-expanded) message read by parseScoreParams, and
+// the matched data count read by processMatchedRules.
 type testMatchedRule struct {
 	types.MatchedRule
-	id      int
-	message string
+	id           int
+	message      string
+	matchedDatas int
 }
 
 func (m testMatchedRule) Rule() types.RuleMetadata { return testRuleMetadata{id: m.id} }
 func (m testMatchedRule) Message() string          { return m.message }
+func (m testMatchedRule) MatchedDatas() []types.MatchData {
+	return make([]types.MatchData, m.matchedDatas)
+}
 
 func matchedRule(id int, message string) types.MatchedRule {
 	return testMatchedRule{id: id, message: message}
+}
+
+func matchedRuleWithDataCount(id int, matchedDatas int) types.MatchedRule {
+	return testMatchedRule{id: id, matchedDatas: matchedDatas}
 }
 
 func TestGetConfigRules(t *testing.T) {
@@ -611,6 +620,58 @@ func TestParseScoreParams(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.wantVals) {
 				t.Errorf("params mismatch:\n got:  %v\n want: %v", got, tt.wantVals)
+			}
+		})
+	}
+}
+
+func TestProcessMatchedRules(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []types.MatchedRule
+		want  map[int]int
+	}{
+		{
+			name:  "no matched rules",
+			rules: []types.MatchedRule{},
+			want:  map[int]int{},
+		},
+		{
+			name:  "single rule with a single matched variable",
+			rules: []types.MatchedRule{matchedRuleWithDataCount(942100, 1)},
+			want:  map[int]int{942100: 1},
+		},
+		{
+			name: "single rule matching several variables at once",
+			// e.g. a rule targeting ARGS that matches more than one parameter.
+			rules: []types.MatchedRule{matchedRuleWithDataCount(942100, 3)},
+			want:  map[int]int{942100: 3},
+		},
+		{
+			name: "several distinct rules",
+			rules: []types.MatchedRule{
+				matchedRuleWithDataCount(942100, 1),
+				matchedRuleWithDataCount(949110, 1),
+				matchedRuleWithDataCount(200002, 2),
+			},
+			want: map[int]int{942100: 1, 949110: 1, 200002: 2},
+		},
+		{
+			// A rule can match (and thus appear in the matched rules) without
+			// any MatchedData, e.g. a chain's last rule with no operator of
+			// its own. Its entry must still be present in the result, with a
+			// count of 0, rather than being omitted.
+			name:  "rule with no matched data",
+			rules: []types.MatchedRule{matchedRuleWithDataCount(942100, 0)},
+			want:  map[int]int{942100: 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := processMatchedRules(tt.rules)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("processMatchedRules() = %v, want %v", got, tt.want)
 			}
 		})
 	}
