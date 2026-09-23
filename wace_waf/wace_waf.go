@@ -39,7 +39,7 @@ const (
 type WaceWAF struct {
 	coraza.WAF
 	exceptionWAF  coraza.WAF
-	waceWafConfig *waceWAFConfig
+	waceWafConfig *WaceWAFConfig
 	logger        *lg.Logging
 }
 
@@ -128,19 +128,29 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		}
 	}
 
-	wafConfigs, ok := config.(*waceWAFConfig)
+	wafConfigs, ok := config.(*WaceWAFConfig)
 
 	if !ok {
-		return nil, fmt.Errorf("Error casting to waceWAFConfig")
+		return nil, fmt.Errorf("Error casting to *WaceWAFConfig: use NewWaceWAFConfig or NewWAFConfig")
 	}
 
 	// Get rules by CRS Version
 	configRules := []string{}
 
-	if wafConfigs.waceAppConfigFilePath != "" {
-		err := wafConfigs.LoadConfig(wafConfigs.waceAppConfigFilePath)
+	if wafConfigs.waceAppConfigFilePath != "" || wafConfigs.waceConfigRaw != nil {
+
+		// WACE App Config file takes precedence over the raw configuration data
+		if wafConfigs.waceAppConfigFilePath != "" {
+			conf, err := loadConfig(wafConfigs.waceAppConfigFilePath)
+			if err != nil {
+				return nil, fmt.Errorf("Error reading waceAppConfig file %s: %v", wafConfigs.waceAppConfigFilePath, err)
+			}
+			wafConfigs.waceConfigRaw = &conf
+		}
+
+		err := wafConfigs.loadWaceAppConfig(*wafConfigs.waceConfigRaw)
 		if err != nil {
-			return nil, fmt.Errorf("Error loading waceAppConfig: %v", err)
+			return nil, fmt.Errorf("Error applying waceAppConfig: %v", err)
 		}
 		if !wafConfigs.disableCRS {
 			configRules = wafConfigs.getConfigRules(gConfig.crsVersion)
@@ -167,7 +177,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error loading exceptions file %s: %v", wafConfigs.exceptionsFilePath, err)
 	}
 
 	return &WaceWAF{waf, exceptionsWaf, wafConfigs, lg.Get()}, err

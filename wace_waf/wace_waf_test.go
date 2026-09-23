@@ -2,11 +2,13 @@ package waceWAF
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/corazawaf/coraza/v3"
+	"github.com/corazawaf/coraza/v3/types"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
@@ -378,7 +380,7 @@ func TestBlockTransactionsBlockingDisabled(t *testing.T) {
 
 // TestBlockTransactionsAppConfigOverridesGeneralBlocking verifies that a
 // per-app waceappconfig.yaml's blocking value takes priority over the
-// general config's: LoadConfigYaml (the app-config path) always sets
+// general config's: loadWaceAppConfig (the app-config path) always sets
 // blocking from the app config, never falling back to the general config's
 // value the way LoadConfigFromGeneralConfig does. Here the general config
 // has blocking: false but the app config has blocking: true, so the
@@ -410,6 +412,49 @@ func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
 	i := tx.ProcessRequestHeaders()
 	if i == nil {
 		t.Error("transaction was not blocked, but the app config's blocking: true should take priority over the general config's blocking: false")
+	}
+
+	tx.ProcessLogging()
+}
+
+// TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking is the
+// WithWaceAppConfig counterpart of
+// TestBlockTransactionsAppConfigOverridesGeneralBlocking: an in-memory app
+// configuration with blocking: true must take priority over the general
+// config's blocking: false.
+func TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_block_transaction_general_no_block.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConf := NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:      []string{"trivial", "trivial2"},
+			DecisionIds:   []string{"weighted_sum"},
+			EarlyBlocking: true,
+			Blocking:      true,
+		}).
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	tx.SetServerName("Apache")
+	i := tx.ProcessRequestHeaders()
+	if i == nil {
+		t.Error("transaction was not blocked, but the in-memory app config's blocking: true should take priority over the general config's blocking: false")
 	}
 
 	tx.ProcessLogging()
@@ -464,6 +509,33 @@ func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
 	}
 }
 
+// exceptionsModelsByType maps each exception rule type to the only model of
+// that type declared in waceconfig_all_models.yaml. waceexceptions.conf
+// disables a model when the request URI contains its id.
+var exceptionsModelsByType = map[string]string{
+	"RequestHeaders":  "trivialRequestHeaders",
+	"RequestBody":     "trivialRequestBody",
+	"AllRequest":      "trivialAllRequest",
+	"ResponseHeaders": "trivialResponseHeaders",
+	"ResponseBody":    "trivialResponseBody",
+	"AllResponse":     "trivialAllResponse",
+}
+
+// exceptionsActiveModels returns the models reported as active by the
+// exceptions rule of the given type, and whether that rule was matched.
+func exceptionsActiveModels(tx types.Transaction, exceptionType string) ([]string, bool) {
+	for _, rule := range tx.(WaceTransaction).exceptionTransaction.MatchedRules() {
+		if rule.Rule().ID() == gConfig.ruleIdsForExceptions[exceptionType] {
+			return ParseActiveModels(rule.Message()), true
+		}
+	}
+	return nil, false
+}
+
+// TestExceptions verifies that the exceptions file disables only the model
+// whose exception is triggered, in every phase. With a URI that triggers no
+// exception, every model must remain active; with a URI containing a model id,
+// that model must be reported as inactive while the others stay active.
 func TestExceptions(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
@@ -480,57 +552,168 @@ func TestExceptions(t *testing.T) {
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
-		t.Errorf("Error creating WAF: %v", err.Error())
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tests := []struct {
+		name          string
+		disabledModel string
+	}{
+		{name: "no exception triggered", disabledModel: ""},
+		{name: "exception for trivialRequestHeaders", disabledModel: "trivialRequestHeaders"},
+		{name: "exception for trivialRequestBody", disabledModel: "trivialRequestBody"},
+		{name: "exception for trivialAllRequest", disabledModel: "trivialAllRequest"},
+		{name: "exception for trivialResponseHeaders", disabledModel: "trivialResponseHeaders"},
+		{name: "exception for trivialResponseBody", disabledModel: "trivialResponseBody"},
+		{name: "exception for trivialAllResponse", disabledModel: "trivialAllResponse"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := waf.NewTransaction()
+			if tx == nil {
+				t.Fatal("Error creating transaction")
+			}
+			defer tx.ProcessLogging()
+
+			tx.ProcessURI("http://localhost:8090/"+tt.disabledModel, "GET", "HTTP/1.1")
+			tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+			if i := tx.ProcessRequestHeaders(); i != nil {
+				t.Errorf("request headers should not be blocked, got interruption: %v", i)
+			}
+
+			body := "test"
+			_, count, err := tx.ReadRequestBodyFrom(strings.NewReader(body))
+			if err != nil {
+				t.Errorf("Error reading request body: %v", err.Error())
+			}
+			if count != len(body) {
+				t.Errorf("Error reading request body: Expected bytes: %d, Got: %d", len(body), count)
+			}
+			i, err := tx.ProcessRequestBody()
+			if err != nil {
+				t.Errorf("Error processing request body: %v", err.Error())
+			}
+			if i != nil {
+				t.Errorf("request body should not be blocked, got interruption: %v", i)
+			}
+
+			tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+			if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+				t.Errorf("response headers should not be blocked, got interruption: %v", i)
+			}
+
+			_, count, err = tx.WriteResponseBody([]byte(body))
+			if err != nil {
+				t.Errorf("Error writing response body: %v", err.Error())
+			}
+			if count != len(body) {
+				t.Errorf("Error writing response body: Expected bytes: %d, Got: %d", len(body), count)
+			}
+			if _, err := tx.ProcessResponseBody(); err != nil {
+				t.Errorf("Error processing response body: %v", err.Error())
+			}
+
+			for exceptionType, model := range exceptionsModelsByType {
+				activeModels, found := exceptionsActiveModels(tx, exceptionType)
+				if !found {
+					t.Errorf("expected the %s exceptions rule to be matched", exceptionType)
+					continue
+				}
+				expected := []string{model}
+				if model == tt.disabledModel {
+					expected = []string{}
+				}
+				if !reflect.DeepEqual(activeModels, expected) {
+					t.Errorf("%s: expected active models %q, got %q", exceptionType, expected, activeModels)
+				}
+			}
+		})
+	}
+}
+
+// TestWithExceptionsFromFile verifies that WithExceptionsFromFile loads an
+// exceptions file regardless of its name. The testdata exceptions file is
+// copied under a name that WithDirectivesFromFile would not recognize, and the
+// request URI triggers the exception that disables trivialRequestHeaders: the
+// exceptions WAF must then report that model as inactive in phase 1.
+func TestWithExceptionsFromFile(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	data, err := os.ReadFile("testdata/config/waceexceptions.conf")
+	if err != nil {
+		t.Fatalf("Error reading exceptions testdata: %v", err)
+	}
+	exceptionsPath := filepath.Join(t.TempDir(), "custom_exceptions.conf")
+	if err := os.WriteFile(exceptionsPath, data, 0o600); err != nil {
+		t.Fatalf("Error writing exceptions file: %v", err)
+	}
+
+	wafConf := NewWaceWAFConfig().
+		WithExceptionsFromFile(exceptionsPath).
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+	if waf.waceWafConfig.exceptionsFilePath != exceptionsPath {
+		t.Fatalf("expected exceptionsFilePath %q, got %q", exceptionsPath, waf.waceWafConfig.exceptionsFilePath)
 	}
 
 	tx := waf.NewTransaction()
-	if tx == nil {
-		t.Errorf("Error creating transaction")
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090/trivialRequestHeaders", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
 	}
 
-	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
-	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
-	i := tx.ProcessRequestHeaders()
-	if i != nil {
-		t.Errorf("Error processing request headers that should not be blocked")
+	activeModels, found := exceptionsActiveModels(tx, "RequestHeaders")
+	if !found {
+		t.Fatal("expected the exceptions WAF to match the RequestHeaders exceptions rule")
 	}
+	if len(activeModels) != 0 {
+		t.Errorf("expected trivialRequestHeaders to be disabled by the exceptions file, got active models %q", activeModels)
+	}
+}
 
-	body := "test"
-	reader := strings.NewReader(body)
-	_, count, err := tx.ReadRequestBodyFrom(reader)
-	if err != nil {
-		t.Errorf("Error reading request body: %v", err.Error())
-	}
-	if count != len(body) {
-		t.Errorf("Error reading request body: Expected bytes: %d, Got: %d", len(body), count)
-	}
-	i, err = tx.ProcessRequestBody()
-	if err != nil {
-		t.Errorf("Error processing request body: %v", err.Error())
-	}
-	if i != nil {
-		t.Errorf("Error processing request body that should not be blocked")
-	}
+// TestWithExceptionsFromFileNotFound verifies that a missing exceptions file
+// makes WAF creation fail with an error that names the file.
+func TestWithExceptionsFromFileNotFound(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
 
-	tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
-	i = tx.ProcessResponseHeaders(200, "HTTP/1.1")
-	if i != nil {
-		t.Errorf("Error processing response headers: %v", err.Error())
-	}
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
 
-	_, count, err = tx.WriteResponseBody([]byte(body))
-	if err != nil {
-		t.Errorf("Error writing response body: %v", err.Error())
-	}
-	if count != len(body) {
-		t.Errorf("Error writing response body: Expected bytes: %d, Got: %d", len(body), count)
-	}
-	i, err = tx.ProcessResponseBody()
-	if err != nil {
-		t.Errorf("Error processing response body: %v", err.Error())
-	}
+	exceptionsPath := "testdata/config/missing_exceptions.conf"
+	wafConf := NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:    []string{"trivial"},
+			DecisionIds: []string{"weighted_sum"},
+			DisableCRS:  true,
+		}).
+		WithExceptionsFromFile(exceptionsPath)
 
-	tx.ProcessLogging()
+	_, err := NewWAF(wafConf)
+	if err == nil {
+		t.Fatal("expected WAF creation to fail with a missing exceptions file")
+	}
+	if !strings.Contains(err.Error(), "Error loading exceptions file") || !strings.Contains(err.Error(), exceptionsPath) {
+		t.Errorf("expected an error loading %q, got: %v", exceptionsPath, err)
+	}
 }
 
 // TestTrainingModelNotUsedInDecision verifies that a model in training mode
