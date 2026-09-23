@@ -28,10 +28,12 @@ type generalConfig struct {
 	hash                 string
 }
 
-// waceWAFConfig implements the WAFConfig interface and adds the specific configuration for the WaceWAF
-type waceWAFConfig struct {
+// WaceWAFConfig implements the WAFConfig interface and adds the specific configuration for the WaceWAF.
+// It must be created with NewWaceWAFConfig or NewWAFConfig: the zero value is not usable.
+type WaceWAFConfig struct {
 	coraza.WAFConfig
 	exceptionsConfig      coraza.WAFConfig
+	waceConfigRaw         *WaceAppConfigFileData
 	waceAppConfigFilePath string
 	exceptionsFilePath    string
 	waceModels            *WaceModels
@@ -99,28 +101,33 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	return confData, err
 }
 
-// LoadConfig loads the configuration from the config file to memory
-func (w *waceWAFConfig) LoadConfig(configFilePath string) error {
-	var file, err = os.ReadFile(configFilePath)
-	if err != nil {
-		return err
-	}
-	return w.LoadConfigYaml(file)
+// parseWaceConfig parses the WACE App configuration from YAML data
+func parseWaceConfig(data []byte) (WaceAppConfigFileData, error) {
+	var conf WaceAppConfigFileData
+	err := yaml.Unmarshal(data, &conf)
+	return conf, err
 }
 
-// LoadConfigYaml loads the application configuration from the config file to memory
-func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
+// loadConfig reads and parses the WACE App configuration from the given file
+func loadConfig(configFilePath string) (WaceAppConfigFileData, error) {
+	var file, err = os.ReadFile(configFilePath)
 	var conf WaceAppConfigFileData
 
-	err := yaml.Unmarshal(config, &conf)
 	if err != nil {
-		return err
+		return conf, err
 	}
 
+	return parseWaceConfig(file)
+}
+
+// loadWaceAppConfig applies the WACE App configuration to the WAF config and
+// validates its models and decision plugins against the general configuration
+func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData) error {
 	w.disableCRS = conf.DisableCRS
 	w.earlyBlocking = conf.EarlyBlocking
 	w.blocking = conf.Blocking
 
+	var err error
 	w.waceModels, w.waceDecisionIds, err = newWacePluginsConfig(conf.ModelIds, conf.DecisionIds)
 	if err != nil {
 		return err
@@ -135,7 +142,7 @@ func (w *waceWAFConfig) LoadConfigYaml(config []byte) error {
 // LoadConfigFromGeneralConfig loads the application configuration from the general configuration
 // it is used when the application configuration is not provided in a file.
 // It uses the first decision plugin and uses all the models declared in the general configuration
-func (w *waceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
+func (w *WaceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.earlyBlocking = gConfig.earlyBlocking
 	w.blocking = g.blocking
 	w.waceModels = g.waceModels
@@ -258,7 +265,7 @@ func reportingRule(phase int) string {
 
 // getConfigRules returns the WACE directives injected around the OWASP CRS
 // rules.
-func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
+func (w *WaceWAFConfig) getConfigRules(CRSVersion string) []string {
 	if CRSVersion == "" {
 		return []string{}
 	}
@@ -281,15 +288,21 @@ func (w *waceWAFConfig) getConfigRules(CRSVersion string) []string {
 	return res
 }
 
+// NewWaceWAFConfig is like NewWAFConfig but returns the concrete type,
+// giving access to WACE-specific options such as WithWaceAppConfig.
+func NewWaceWAFConfig() *WaceWAFConfig {
+	return &WaceWAFConfig{WAFConfig: coraza.NewWAFConfig(), exceptionsConfig: coraza.NewWAFConfig()}
+}
+
 // NewWAFConfig creates a new WAFConfig with default values
 func NewWAFConfig() coraza.WAFConfig {
-	return &waceWAFConfig{coraza.NewWAFConfig(), coraza.NewWAFConfig(), "", "", nil, nil, false, false, false}
+	return NewWaceWAFConfig()
 }
 
 // WithDirectivesFromFile implements the function specified in the WAFConfig interface to add directives from a file
 // if the file is the exceptions file, it is added to the exceptionsConfig
 // if the file is the waceAppConfig file, it is added to the waceAppConfigFilePath
-func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFConfig {
 	if strings.Contains(filePath, "waceexceptions.conf") {
 		conf.exceptionsFilePath = filePath
 	} else if strings.Contains(filePath, "waceappconfig.yaml") {
@@ -300,68 +313,83 @@ func (conf *waceWAFConfig) WithDirectivesFromFile(filePath string) coraza.WAFCon
 	return conf
 }
 
+// WithWaceAppConfig sets the WACE App configuration directly, without reading it from a file.
+// If a waceappconfig.yaml file is also added through WithDirectivesFromFile, the file takes precedence.
+func (conf *WaceWAFConfig) WithWaceAppConfig(config WaceAppConfigFileData) *WaceWAFConfig {
+	conf.waceConfigRaw = &config
+	return conf
+}
+
+// WithExceptionsFromFile sets the WACE exceptions file, regardless of its name
+// (unlike WithDirectivesFromFile, which only recognizes files named waceexceptions.conf).
+// Only one exceptions file is supported: calling it again replaces the previous one.
+func (conf *WaceWAFConfig) WithExceptionsFromFile(filePath string) *WaceWAFConfig {
+	conf.exceptionsFilePath = filePath
+	return conf
+}
+
 // WithDirectives implements the function specified in the WAFConfig interface to add directives
-func (conf *waceWAFConfig) WithDirectives(directives string) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithDirectives(directives string) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithDirectives(directives)
 	return conf
 }
 
 // WithRequestHeadersAccess implements the function specified in the WAFConfig interface to add request headers access
-func (conf *waceWAFConfig) WithRequestBodyAccess() coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithRequestBodyAccess() coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithRequestBodyAccess()
 	conf.exceptionsConfig = conf.exceptionsConfig.WithRequestBodyAccess()
 	return conf
 }
 
 // WithRequestBodyLimit implements the function specified in the WAFConfig interface to add request body limit
-func (conf *waceWAFConfig) WithRequestBodyLimit(limit int) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithRequestBodyLimit(limit int) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithRequestBodyLimit(limit)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithRequestBodyLimit(limit)
 	return conf
 }
 
 // WithResponseBodyAccess implements the function specified in the WAFConfig interface to add response body access
-func (conf *waceWAFConfig) WithResponseBodyAccess() coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithResponseBodyAccess() coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithResponseBodyAccess()
 	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyAccess()
 	return conf
 }
 
 // WithRequestBodyInMemoryLimit implements the function specified in the WAFConfig interface to add request body in memory limit
-func (conf *waceWAFConfig) WithRequestBodyInMemoryLimit(limit int) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithRequestBodyInMemoryLimit(limit int) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithRequestBodyInMemoryLimit(limit)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithRequestBodyInMemoryLimit(limit)
 	return conf
 }
 
 // WithResponseBodyLimit implements the function specified in the WAFConfig interface to add response body limit
-func (conf *waceWAFConfig) WithResponseBodyLimit(limit int) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithResponseBodyLimit(limit int) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithResponseBodyLimit(limit)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyLimit(limit)
 	return conf
 }
 
 // WithResponseBodyMimeTypes implements the function specified in the WAFConfig interface to add response body mime types
-func (conf *waceWAFConfig) WithResponseBodyMimeTypes(mimeTypes []string) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithResponseBodyMimeTypes(mimeTypes []string) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithResponseBodyMimeTypes(mimeTypes)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithResponseBodyMimeTypes(mimeTypes)
 	return conf
 }
 
 // WithDebugLogger implements the function specified in the WAFConfig interface to add a debug logger
-func (conf *waceWAFConfig) WithDebugLogger(logger debuglog.Logger) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithDebugLogger(logger debuglog.Logger) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithDebugLogger(logger)
 	return conf
 }
 
 // WithErrorCallback implements the function specified in the WAFConfig interface to add an error callback
-func (conf *waceWAFConfig) WithErrorCallback(logger func(rule types.MatchedRule)) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithErrorCallback(logger func(rule types.MatchedRule)) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithErrorCallback(logger)
 	return conf
 }
 
 // WithRootFS implements the function specified in the WAFConfig interface to add the root file system
-func (conf *waceWAFConfig) WithRootFS(fs fs.FS) coraza.WAFConfig {
+func (conf *WaceWAFConfig) WithRootFS(fs fs.FS) coraza.WAFConfig {
 	conf.WAFConfig = conf.WAFConfig.WithRootFS(fs)
 	conf.exceptionsConfig = conf.exceptionsConfig.WithRootFS(fs)
 	return conf
@@ -370,7 +398,7 @@ func (conf *waceWAFConfig) WithRootFS(fs fs.FS) coraza.WAFConfig {
 // LoadExceptionsDirectives loads the exceptions directives from the exceptions file
 // previously sets the models in seclang variables and then adds the exceptions directives
 // finally adds a final rule to export the active models
-func (conf *waceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceModels) coraza.WAFConfig {
+func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig *WaceModels) coraza.WAFConfig {
 	finalsRules := []string{}
 	modelsToSet := ""
 	modelsToGet := ""

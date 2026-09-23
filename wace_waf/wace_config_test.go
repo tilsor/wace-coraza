@@ -59,7 +59,7 @@ func TestGetConfigRules(t *testing.T) {
 	// rule set must be the same regardless of the CRS version string, as
 	// long as one is actually configured.
 	for _, version := range []string{"4.4", "4.4.0-dev", "5.0"} {
-		cfg := waceWAFConfig{earlyBlocking: false}
+		cfg := WaceWAFConfig{earlyBlocking: false}
 		rules := cfg.getConfigRules(version)
 
 		if len(rules) != 8 {
@@ -94,7 +94,7 @@ func TestGetConfigRules(t *testing.T) {
 	// CRS-specific directives should be emitted: SecRuleUpdateActionById
 	// (unlike SecRuleRemoveById) fails WAF creation if its target rule id
 	// isn't loaded, so this must not assume CRS's rules exist.
-	cfgNoCRS := waceWAFConfig{earlyBlocking: false}
+	cfgNoCRS := WaceWAFConfig{earlyBlocking: false}
 	rulesNoCRS := cfgNoCRS.getConfigRules("")
 	if len(rulesNoCRS) != 0 {
 		t.Errorf("expected no rules when CRS version is empty, got: %v", rulesNoCRS)
@@ -102,7 +102,7 @@ func TestGetConfigRules(t *testing.T) {
 
 	// early_blocking inserts an id'd setvar rule right after the CRS
 	// blocking rules are neutralized and before the reporting rules.
-	cfgEarly := waceWAFConfig{earlyBlocking: true}
+	cfgEarly := WaceWAFConfig{earlyBlocking: true}
 	rulesEarly := cfgEarly.getConfigRules("4.4")
 	if len(rulesEarly) != 9 {
 		t.Fatalf("expected 9 rules with early_blocking, got %d: %v", len(rulesEarly), rulesEarly)
@@ -112,7 +112,7 @@ func TestGetConfigRules(t *testing.T) {
 	}
 
 	// early_blocking must still be a no-op (no rules) when CRS isn't loaded.
-	cfgEarlyNoCRS := waceWAFConfig{earlyBlocking: true}
+	cfgEarlyNoCRS := WaceWAFConfig{earlyBlocking: true}
 	if rules := cfgEarlyNoCRS.getConfigRules(""); len(rules) != 0 {
 		t.Errorf("expected no rules when CRS version is empty even with early_blocking, got: %v", rules)
 	}
@@ -210,7 +210,9 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 	}
 }
 
-// Ejemplo de prueba para waceWAFConfig.LoadConfig
+// TestWaceWAFConfigLoadConfig verifies that a per-app waceappconfig.yaml read
+// with loadConfig and applied with loadWaceAppConfig loads its model and
+// decision plugin ids.
 func TestWaceWAFConfigLoadConfig(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
@@ -228,12 +230,15 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err)
 	}
 
-	wConfig := waceWAFConfig{}
-	filePath := "testdata/config/app1waceappconfig.yaml"
-
-	err = wConfig.LoadConfig(filePath)
+	appConfig, err := loadConfig("testdata/config/app1waceappconfig.yaml")
 	if err != nil {
-		t.Fatalf("Error loading waceappconfig: %v", err)
+		t.Fatalf("Error reading waceappconfig: %v", err)
+	}
+
+	wConfig := NewWaceWAFConfig()
+	err = wConfig.loadWaceAppConfig(appConfig)
+	if err != nil {
+		t.Fatalf("Error applying waceappconfig: %v", err)
 	}
 
 	if len(wConfig.waceDecisionIds) == 0 {
@@ -245,7 +250,7 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 	}
 }
 
-// TestWaceWAFConfigLoadConfigNewFields verifies that LoadConfigYaml parses the
+// TestWaceWAFConfigLoadConfigNewFields verifies that loadConfig parses the
 // early_blocking, disable_crs, blocking and app_name fields from a
 // per-app waceappconfig.yaml file.
 func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
@@ -265,10 +270,18 @@ func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
 		t.Fatalf("Error creating WAF: %v", err)
 	}
 
-	wConfig := waceWAFConfig{}
-	err = wConfig.LoadConfig("testdata/config/app2waceappconfig.yaml")
+	appConfig, err := loadConfig("testdata/config/app2waceappconfig.yaml")
 	if err != nil {
-		t.Fatalf("Error loading waceappconfig: %v", err)
+		t.Fatalf("Error reading waceappconfig: %v", err)
+	}
+	if appConfig.AppName != "Application 2" {
+		t.Errorf("expected app_name %q, got %q", "Application 2", appConfig.AppName)
+	}
+
+	wConfig := NewWaceWAFConfig()
+	err = wConfig.loadWaceAppConfig(appConfig)
+	if err != nil {
+		t.Fatalf("Error applying waceappconfig: %v", err)
 	}
 
 	if !wConfig.earlyBlocking {
@@ -279,6 +292,95 @@ func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
 	}
 	if !wConfig.blocking {
 		t.Error("expected blocking to be true")
+	}
+}
+
+// TestParseWaceConfig verifies that parseWaceConfig maps every field of a
+// waceappconfig.yaml document into WaceAppConfigFileData.
+func TestParseWaceConfig(t *testing.T) {
+	data := []byte(`
+model_ids: ["trivial", "trivial2"]
+decision_ids: ["weighted_sum", "weighted_sum_training"]
+early_blocking: true
+disable_crs: true
+blocking: true
+app_name: "Application 3"
+`)
+
+	conf, err := parseWaceConfig(data)
+	if err != nil {
+		t.Fatalf("unexpected error parsing waceappconfig: %v", err)
+	}
+
+	expected := WaceAppConfigFileData{
+		ModelIds:      []string{"trivial", "trivial2"},
+		DecisionIds:   []string{"weighted_sum", "weighted_sum_training"},
+		EarlyBlocking: true,
+		DisableCRS:    true,
+		Blocking:      true,
+		AppName:       "Application 3",
+	}
+	if !reflect.DeepEqual(conf, expected) {
+		t.Errorf("expected %+v, got %+v", expected, conf)
+	}
+}
+
+// TestParseWaceConfigInvalidYaml verifies that malformed YAML is reported as
+// an error instead of silently producing an empty configuration.
+func TestParseWaceConfigInvalidYaml(t *testing.T) {
+	_, err := parseWaceConfig([]byte("model_ids: [\"trivial\""))
+	if err == nil {
+		t.Error("expected an error parsing malformed YAML, got nil")
+	}
+}
+
+// TestLoadConfigFileNotFound verifies that loadConfig returns the read error
+// when the waceappconfig.yaml file does not exist.
+func TestLoadConfigFileNotFound(t *testing.T) {
+	_, err := loadConfig("testdata/config/missingwaceappconfig.yaml")
+	if err == nil {
+		t.Error("expected an error reading a missing waceappconfig file, got nil")
+	}
+}
+
+// TestNewWaceWAFConfig verifies that both constructors return a usable
+// *WaceWAFConfig: the embedded Coraza configs must be initialized, since
+// every With* method delegates to them.
+func TestNewWaceWAFConfig(t *testing.T) {
+	conf := NewWaceWAFConfig()
+	if conf.WAFConfig == nil || conf.exceptionsConfig == nil {
+		t.Fatal("expected NewWaceWAFConfig to initialize the embedded Coraza configs")
+	}
+	if conf.waceConfigRaw != nil || conf.waceAppConfigFilePath != "" {
+		t.Error("expected a new config to have no WACE App configuration set")
+	}
+
+	if _, ok := NewWAFConfig().(*WaceWAFConfig); !ok {
+		t.Error("expected NewWAFConfig to return a *WaceWAFConfig")
+	}
+}
+
+// TestWithWaceAppConfig verifies that WithWaceAppConfig stores a copy of the
+// given configuration and returns the same config, so it can be chained.
+func TestWithWaceAppConfig(t *testing.T) {
+	appConfig := WaceAppConfigFileData{
+		ModelIds:    []string{"trivial"},
+		DecisionIds: []string{"weighted_sum"},
+		Blocking:    true,
+	}
+
+	conf := NewWaceWAFConfig()
+	res := conf.WithWaceAppConfig(appConfig)
+	if res != conf {
+		t.Error("expected WithWaceAppConfig to return the same config it was called on")
+	}
+	if conf.waceConfigRaw == nil {
+		t.Fatal("expected WithWaceAppConfig to set the WACE App configuration")
+	}
+
+	appConfig.Blocking = false
+	if !conf.waceConfigRaw.Blocking {
+		t.Error("expected WithWaceAppConfig to store a copy, unaffected by later changes to the argument")
 	}
 }
 
@@ -297,7 +399,7 @@ func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
 	}
 	defer func() { gConfig = nil }()
 
-	w := &waceWAFConfig{}
+	w := &WaceWAFConfig{}
 	w.LoadConfigFromGeneralConfig(*gConfig)
 
 	if !w.blocking {
@@ -353,6 +455,123 @@ func TestNewWAFCRSRequiredWithoutDisableCRS(t *testing.T) {
 	_, err := NewWAF(wafConfig)
 	if err == nil {
 		t.Fatal("expected WAF creation to fail: crs_version is configured but the CRS ruleset was never loaded")
+	}
+}
+
+// TestNewWAFWithWaceAppConfig verifies that a WACE App configuration passed
+// with WithWaceAppConfig (no waceappconfig.yaml file) is applied by NewWAF.
+// As in TestNewWAFDisableCRS, the CRS ruleset is not loaded, so WAF creation
+// only succeeds if disable_crs from the in-memory configuration is honored.
+func TestNewWAFWithWaceAppConfig(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:      []string{"trivial"},
+			DecisionIds:   []string{"weighted_sum"},
+			EarlyBlocking: true,
+			DisableCRS:    true,
+			Blocking:      true,
+		})
+	waf, err := NewWAF(wafConfig)
+	if err != nil {
+		t.Fatalf("expected WAF creation to succeed with an in-memory waceappconfig, got: %v", err)
+	}
+
+	c := waf.waceWafConfig
+	if !c.disableCRS || !c.earlyBlocking || !c.blocking {
+		t.Errorf("expected disableCRS, earlyBlocking and blocking to be true, got %v, %v, %v", c.disableCRS, c.earlyBlocking, c.blocking)
+	}
+	if !reflect.DeepEqual(c.waceDecisionIds, []string{"weighted_sum"}) {
+		t.Errorf("expected waceDecisionIds %q, got %q", []string{"weighted_sum"}, c.waceDecisionIds)
+	}
+	if !reflect.DeepEqual(c.waceModels.reqHeadModelIDs, []string{"trivial"}) {
+		t.Errorf("expected reqHeadModelIDs %q, got %q", []string{"trivial"}, c.waceModels.reqHeadModelIDs)
+	}
+}
+
+// TestNewWAFAppConfigFileTakesPrecedence verifies that when both a
+// waceappconfig.yaml file and an in-memory configuration are provided, the
+// file wins. The in-memory configuration keeps CRS enabled while the file
+// disables it; since the CRS ruleset is not loaded, WAF creation only
+// succeeds if the file's disable_crs is the one applied.
+func TestNewWAFAppConfigFileTakesPrecedence(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:    []string{"trivial"},
+			DecisionIds: []string{"weighted_sum"},
+			DisableCRS:  false,
+		}).
+		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml")
+	waf, err := NewWAF(wafConfig)
+	if err != nil {
+		t.Fatalf("expected the waceappconfig file to take precedence and disable CRS, got: %v", err)
+	}
+	if !waf.waceWafConfig.disableCRS {
+		t.Error("expected disableCRS from the waceappconfig file to be applied")
+	}
+}
+
+// TestNewWAFWithWaceAppConfigUnknownDecision verifies that an in-memory
+// configuration goes through the same validation as a file: decision ids
+// missing from the general configuration make WAF creation fail.
+func TestNewWAFWithWaceAppConfigUnknownDecision(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	wafConfig := NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:    []string{"trivial"},
+			DecisionIds: []string{"nonexistent"},
+			DisableCRS:  true,
+		})
+	_, err := NewWAF(wafConfig)
+	if err == nil {
+		t.Fatal("expected WAF creation to fail with an unknown decision id")
+	}
+	if !strings.Contains(err.Error(), "Error applying waceAppConfig") {
+		t.Errorf("expected an error applying the waceAppConfig, got: %v", err)
+	}
+}
+
+// TestNewWAFAppConfigFileNotFound verifies that NewWAF reports a missing
+// waceappconfig.yaml file as a read error, including the file path.
+func TestNewWAFAppConfigFileNotFound(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer func() {
+		gConfig = nil
+		configstore.Clean()
+	}()
+
+	filePath := "testdata/config/missingwaceappconfig.yaml"
+	wafConfig := NewWAFConfig().WithDirectivesFromFile(filePath)
+	_, err := NewWAF(wafConfig)
+	if err == nil {
+		t.Fatal("expected WAF creation to fail with a missing waceappconfig file")
+	}
+	if !strings.Contains(err.Error(), "Error reading waceAppConfig file") || !strings.Contains(err.Error(), filePath) {
+		t.Errorf("expected a read error mentioning %q, got: %v", filePath, err)
 	}
 }
 
