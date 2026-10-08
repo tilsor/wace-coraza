@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -42,6 +43,8 @@ func main() {
 }
 
 func createWAF() coraza.WAF {
+	waceWAF.SetLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	cfg := waceWAF.NewWAFConfig().
 		WithDirectivesFromFile("coraza.conf").
 		WithDirectivesFromFile("coreruleset/crs-setup.conf.example").

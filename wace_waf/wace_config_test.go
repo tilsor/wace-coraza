@@ -632,8 +632,6 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 func TestGeneralConfigLoadConfigTrainingFields(t *testing.T) {
 	gCfg := generalConfig{}
 	config := []byte(`
-logpath: "/dev/null"
-loglevel: "WARN"
 model_plugins:
   - id: "model_training"
     plugin_type: RequestHeaders

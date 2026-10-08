@@ -1,10 +1,6 @@
 #WACE configuration file
 
 # WACE general configuration
-#The full path to the wace log file
-logpath: "/dev/null"
-#The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
-loglevel: "WARN"
 
 #The model plugins configuration
 model_plugins:

@@ -1,10 +1,6 @@
 #WACE configuration file
 
 # WACE general configuration
-#The full path to the wace log file
-logpath: "/dev/stdout"
-#The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
-loglevel: "DEBUG"
 
 #The model plugins configuration
 model_plugins:
@@ -12,10 +8,10 @@ model_plugins:
     plugin_type: RequestHeaders
     path: "wace_waf/testdata/plugins/trivial.so"
     mode: sync
-  - id: "trivial2"
-    plugin_type: RequestBody
-    path: "wace_waf/testdata/plugins/trivial2.so"
-    mode: sync
+  # - id: "trivial2"
+  #   plugin_type: RequestBody
+  #   path: "wace_waf/testdata/plugins/trivial2.so"
+  #   mode: sync
     
 decision_plugins:
   - id: "weighted_sum"
@@ -26,22 +22,22 @@ decision_plugins:
     waf_weight: 0.5
     params:
       threshold: "0.5"
-  - id: "weighted_sum_training"
-    path: "wace_waf/testdata/plugins/weighted_sum_training.so"
-    model_weights:
-      trivial: 0.25
-      trivial2: 0.25
-    waf_weight: 0.5
-    params:
-      threshold: "0.5"
-    training: true
-    training_data:
-      max_samples: 10
-      result_file_path: "/tmp/training_results.ndjson"
+  # - id: "weighted_sum_training"
+  #   path: "wace_waf/testdata/plugins/weighted_sum_training.so"
+  #   model_weights:
+  #     trivial: 0.25
+  #     trivial2: 0.25
+  #   waf_weight: 0.5
+  #   params:
+  #     threshold: "0.5"
+  #   training: true
+  #   training_data:
+  #     max_samples: 10
+  #     result_file_path: "/tmp/training_results.ndjson"
 
 crs_version: "4.4.0-dev"
 early_blocking: false
-blocking: false
+blocking: true
 
 exception_ids:
   RequestHeaders: 100
