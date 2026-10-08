@@ -1,10 +1,6 @@
 #WACE configuration file
 
 # WACE general configuration
-#The full path to the wace log file
-logpath: "/dev/null"
-#The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
-loglevel: "DEBUG"
 
 #The model plugins configuration
 model_plugins:
@@ -27,7 +23,6 @@ decision_plugins:
     params:
       threshold: "0.1"
 
-otel_url: "localhost:4317"
 crs_version: "4.4.0-dev"
 early_blocking: true
 blocking: true

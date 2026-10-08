@@ -1,2 +1,3 @@
 *.so
-coverage.out
+coverage.*
+bench*.txt

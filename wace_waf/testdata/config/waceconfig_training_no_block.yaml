@@ -3,9 +3,6 @@
 # trivial2 would cause a block in sync mode (see TestBlockTransactions),
 # but must not affect the decision when in training mode.
 
-logpath: "/dev/null"
-loglevel: "DEBUG"
-
 model_plugins:
   - id: "trivial"
     plugin_type: RequestHeaders

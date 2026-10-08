@@ -1,8 +1,5 @@
 #WACE configuration file - invalid: training with zero max_samples
 
-logpath: "/dev/null"
-loglevel: "WARN"
-
 model_plugins:
   - id: "trivial_training"
     plugin_type: RequestHeaders

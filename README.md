@@ -10,8 +10,7 @@
 This section provides details on each field within the configuration files and their purposes. These configurations are necessary to control how the system processes requests, handles plugins, manages logging, and more.
 
 ### File: waceconfig.yaml
-- logpath (String): Specifies the path to the log file where all WACE related logs will be stored. Default is typically set to /var/log/wace.log.
-- loglevel (String): Sets the log level for the application. Possible values include DEBUG, INFO, WARN or ERROR.
+Logging is not configured in this file. Call `waceWAF.SetLogger` with a `*slog.Logger` before `NewWAF` (by default `slog.Default()` is used). The logger must not carry a `component` attribute: WACE WAF logs with `component=waf` and the WACE core adds its own.
 
 **Plugins configuration**
 - model_plugins: Defines the plugins used for processing transactions.

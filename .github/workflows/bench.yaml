@@ -1,0 +1,83 @@
+name: Benchmarks
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  pull-requests: write   # to comment on the PR
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    services:
+      nats:
+        image: nats:latest
+        ports: [ "4222:4222" ]
+    env:
+      WACE_BENCH_NATS_URL: nats://localhost:4222
+      # Base and PR run alternately, one sample of each per round, so
+      # load changes on the runner affect both equally.
+      BENCH_ROUNDS: 6
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    # A plugin only loads in a test binary built from the same directory,
+    # so each version gets its own worktree, plugins and test binary.
+    - name: Build base and PR
+      run: |
+        git worktree add "$RUNNER_TEMP/base" ${{ github.event.pull_request.base.sha }}
+        git worktree add "$RUNNER_TEMP/pr" ${{ github.event.pull_request.head.sha }}
+        for dir in "$RUNNER_TEMP/base" "$RUNNER_TEMP/pr"; do
+          (cd "$dir" && go run mage.go plugins && go test -c -o bench.test ./wace_waf)
+        done
+
+    # The test binary runs from wace_waf, where the tests expect their
+    # relative paths (testdata/, ../coreruleset). Only stdout goes to the
+    # results file, so logs cannot break the lines benchstat parses.
+    - name: Run benchmarks
+      run: |
+        run() {
+          (cd "$RUNNER_TEMP/$1/wace_waf" && ../bench.test -test.run='^$' -test.bench=. \
+            -test.benchmem -test.count=1 -test.timeout=0) >> "$RUNNER_TEMP/$1.txt"
+        }
+        for i in $(seq "$BENCH_ROUNDS"); do
+          echo "round $i/$BENCH_ROUNDS"
+          run base
+          run pr
+        done
+
+    - name: Compare
+      run: |
+        go run golang.org/x/perf/cmd/benchstat@latest \
+          base="$RUNNER_TEMP/base.txt" pr="$RUNNER_TEMP/pr.txt" > "$RUNNER_TEMP/cmp.txt"
+        {
+          echo '### Benchmarks (base vs PR)'
+          echo "${BENCH_ROUNDS} interleaved rounds on a shared runner: differences of a few percent are usually noise, allocs/op is exact."
+          echo '```'
+          cat "$RUNNER_TEMP/cmp.txt"
+          echo '```'
+        } > "$RUNNER_TEMP/comment.md"
+        cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+    # PRs from forks get a read-only token and cannot comment; the table
+    # is still in the job summary.
+    - name: Comment on PR
+      if: github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh pr comment ${{ github.event.pull_request.number }} \
+          --body-file "$RUNNER_TEMP/comment.md" --edit-last --create-if-none

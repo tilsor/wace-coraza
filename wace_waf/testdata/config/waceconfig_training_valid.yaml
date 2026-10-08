@@ -1,8 +1,5 @@
 #WACE configuration file - valid training model
 
-logpath: "/dev/null"
-loglevel: "DEBUG"
-
 model_plugins:
   - id: "trivial_training"
     plugin_type: RequestHeaders

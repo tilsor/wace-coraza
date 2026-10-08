@@ -1,10 +1,6 @@
 #WACE configuration file
 
 # WACE general configuration
-#The full path to the wace log file
-logpath: "/dev/stdout"
-#The level of debug, the valid options are - ERRO, WARN, INFO, DEBUG
-loglevel: "DEBUG"
 
 #The model plugins configuration
 model_plugins:
@@ -41,7 +37,7 @@ decision_plugins:
 
 crs_version: "4.4.0-dev"
 early_blocking: false
-blocking: false
+blocking: true
 
 exception_ids:
   RequestHeaders: 100

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/corazawaf/coraza/v3/types"
-	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 )
 
 // testRuleMetadata is a minimal types.RuleMetadata used to build matched rules
@@ -146,10 +145,7 @@ func TestNewConfig(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -217,10 +213,7 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -257,10 +250,7 @@ func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -423,10 +413,7 @@ func TestNewWAFDisableCRS(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml")
@@ -445,10 +432,7 @@ func TestNewWAFCRSRequiredWithoutDisableCRS(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/app1waceappconfig.yaml")
@@ -466,10 +450,7 @@ func TestNewWAFWithWaceAppConfig(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -505,10 +486,7 @@ func TestNewWAFAppConfigFileTakesPrecedence(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -533,10 +511,7 @@ func TestNewWAFWithWaceAppConfigUnknownDecision(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -559,10 +534,7 @@ func TestNewWAFAppConfigFileNotFound(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	filePath := "testdata/config/missingwaceappconfig.yaml"
 	wafConfig := NewWAFConfig().WithDirectivesFromFile(filePath)
@@ -579,10 +551,7 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -632,8 +601,6 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 func TestGeneralConfigLoadConfigTrainingFields(t *testing.T) {
 	gCfg := generalConfig{}
 	config := []byte(`
-logpath: "/dev/null"
-loglevel: "WARN"
 model_plugins:
   - id: "model_training"
     plugin_type: RequestHeaders
@@ -679,10 +646,7 @@ func TestNewWAFWithTrainingModel(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_training_valid.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -727,10 +691,7 @@ func TestNewWAFWithInvalidTrainingConfig(t *testing.T) {
 			configFilePath = tt.configFile
 			gConfig = nil
 
-			defer func() {
-				gConfig = nil
-				configstore.Clean()
-			}()
+			defer resetWACE()
 
 			wafConfig := NewWAFConfig()
 			_, err := NewWAF(wafConfig)
