@@ -43,7 +43,6 @@ decision_plugins:
     params:
       threshold: "0.5"
 
-otel_url: "localhost:4317"
 crs_version: "4.4.0-dev"
 early_blocking: true
 

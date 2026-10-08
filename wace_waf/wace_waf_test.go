@@ -1,17 +1,28 @@
 package waceWAF
 
 import (
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
+
+// resetWACE drops the configuration so the next test initializes WACE
+// again.
+func resetWACE() {
+	gConfig = nil
+	configstore.Clean()
+}
 
 func TestResolveConfigFilePathUsesEnvVar(t *testing.T) {
 	expected := "/custom/path/config.yaml"
@@ -47,10 +58,7 @@ func TestNewWaf(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
 		WithDirectivesFromFile("../coreruleset/rules/*.conf")
@@ -64,10 +72,7 @@ func TestTransactionAddData(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -122,10 +127,7 @@ func TestTransactionWithIDAddData(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -180,10 +182,7 @@ func TestTransactionProcess(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
@@ -250,10 +249,7 @@ func TestBlockTransactions(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_block_transaction.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -330,10 +326,7 @@ func TestBlockTransactionsBlockingDisabled(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_block_transaction_blocking_disabled.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -389,10 +382,7 @@ func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_block_transaction_general_no_block.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -426,10 +416,7 @@ func TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking(t *testing.T
 	configFilePath = "testdata/config/waceconfig_block_transaction_general_no_block.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -469,10 +456,7 @@ func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml").
@@ -540,10 +524,7 @@ func TestExceptions(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -641,10 +622,7 @@ func TestWithExceptionsFromFile(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	data, err := os.ReadFile("testdata/config/waceexceptions.conf")
 	if err != nil {
@@ -693,10 +671,7 @@ func TestWithExceptionsFromFileNotFound(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	exceptionsPath := "testdata/config/missing_exceptions.conf"
 	wafConf := NewWaceWAFConfig().
@@ -724,10 +699,7 @@ func TestTrainingModelNotUsedInDecision(t *testing.T) {
 	configFilePath = "testdata/config/waceconfig_training_no_block.yaml"
 	gConfig = nil
 
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
+	defer resetWACE()
 
 	// Set WAF anomaly scores to zero so only model scores can trigger blocking.
 	// trivial2 (weight=1, attack=1.0) is in training mode and must be excluded
@@ -756,110 +728,174 @@ func TestTrainingModelNotUsedInDecision(t *testing.T) {
 	tx.ProcessLogging()
 }
 
+// benchRunCounter makes the remote model ids of each benchmark run unique.
+var benchRunCounter atomic.Uint64
+
+// newBenchWaceWAF creates a WACE WAF with the general config at
+// configPath and the CRS, and resets WACE when the benchmark ends.
+func newBenchWaceWAF(b *testing.B, configPath string) coraza.WAF {
+	b.Helper()
+	configFilePath = configPath
+	gConfig = nil
+	// Logs share stdout with the results under go test and would break
+	// the lines benchstat parses.
+	SetLogger(slog.New(slog.DiscardHandler))
+	b.Cleanup(func() {
+		resetWACE()
+		SetLogger(nil)
+	})
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		b.Fatalf("Error creating WAF: %v", err)
+	}
+	return waf
+}
+
+// newBenchCorazaWAF creates a plain Coraza WAF with the CRS, as a baseline
+// for the WACE benchmarks.
+func newBenchCorazaWAF(b *testing.B) coraza.WAF {
+	b.Helper()
+	wafConf := coraza.NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+	waf, err := coraza.NewWAF(wafConf)
+	if err != nil {
+		b.Fatalf("Error creating WAF: %v", err)
+	}
+	return waf
+}
+
+// runBenchTransaction drives a whole transaction through every phase,
+// the same way the Coraza HTTP middleware does.
+func runBenchTransaction(b *testing.B, waf coraza.WAF) {
+	tx := waf.NewTransaction()
+	defer tx.ProcessLogging()
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	tx.SetServerName("Apache")
+	tx.ProcessRequestHeaders()
+	body := "test"
+	if _, _, err := tx.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+		b.Errorf("Error reading request body: %v", err)
+	}
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		b.Errorf("Error processing request body: %v", err)
+	}
+	tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+	tx.ProcessResponseHeaders(200, "HTTP/1.1")
+	if _, _, err := tx.WriteResponseBody([]byte(body)); err != nil {
+		b.Errorf("Error writing response body: %v", err)
+	}
+	if _, err := tx.ProcessResponseBody(); err != nil {
+		b.Errorf("Error processing response body: %v", err)
+	}
+}
+
+// BenchmarkWaceTransactions measures a full transaction with local sync
+// model plugins, one transaction at a time.
 func BenchmarkWaceTransactions(b *testing.B) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
-
-	wafConf := NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
-		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("../coreruleset/rules/*.conf")
-
-	waf, err := NewWAF(wafConf)
-	if err != nil {
-		b.Errorf("Error creating WAF: %v", err.Error())
-	}
-
-	for i := 0; i < b.N; i++ {
-		tx := waf.NewTransaction()
-		if tx == nil {
-			b.Errorf("Error creating transaction")
-		}
-		tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
-		tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
-		tx.SetServerName("Apache")
-		tx.ProcessRequestHeaders()
-		body := "test"
-		reader := strings.NewReader(body)
-		tx.ReadRequestBodyFrom(reader)
-		tx.ProcessRequestBody()
-		tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
-		tx.ProcessResponseHeaders(200, "HTTP/1.1")
-		tx.WriteResponseBody([]byte(body))
-		tx.ProcessResponseBody()
-		tx.ProcessLogging()
+	waf := newBenchWaceWAF(b, "testdata/config/waceconfig.yaml")
+	b.ReportAllocs()
+	for b.Loop() {
+		runBenchTransaction(b, waf)
 	}
 }
 
+// BenchmarkWaceTransactionsParallel is BenchmarkWaceTransactions with
+// GOMAXPROCS transactions in flight at the same time.
+func BenchmarkWaceTransactionsParallel(b *testing.B) {
+	waf := newBenchWaceWAF(b, "testdata/config/waceconfig.yaml")
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			runBenchTransaction(b, waf)
+		}
+	})
+}
+
+// BenchmarkWaceTransactionsNATS measures a full transaction with remote
+// sync model plugins, which round-trip through NATS. It needs a NATS
+// server, given in WACE_BENCH_NATS_URL (e.g. nats://localhost:4222), and
+// is skipped otherwise. The model side runs in this same process.
 func BenchmarkWaceTransactionsNATS(b *testing.B) {
-	configFilePath = "testdata/config/waceconfig_nats.yaml"
-	gConfig = nil
-
-	defer func() {
-		gConfig = nil
-		configstore.Clean()
-	}()
-
-	wafConf := NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
-		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("../coreruleset/rules/*.conf")
-
-	waf, err := NewWAF(wafConf)
-	if err != nil {
-		b.Errorf("Error creating WAF: %v", err.Error())
+	natsURL := os.Getenv("WACE_BENCH_NATS_URL")
+	if natsURL == "" {
+		b.Skip("WACE_BENCH_NATS_URL not set")
+	}
+	// NATS handlers are never stopped, so every run (including each
+	// -count repetition) needs its own model ids, or the handlers left
+	// over from earlier runs answer too.
+	run := benchRunCounter.Add(1)
+	model1 := fmt.Sprintf("trivial-%d", run)
+	model2 := fmt.Sprintf("trivial2-%d", run)
+	conf := fmt.Sprintf(`nats_url: %q
+model_plugins:
+  - id: %q
+    plugin_type: RequestHeaders
+    path: "testdata/plugins/trivial.so"
+    remote: true
+  - id: %q
+    plugin_type: RequestHeaders
+    path: "testdata/plugins/trivial2.so"
+    remote: true
+decision_plugins:
+  - id: "weighted_sum"
+    path: "testdata/plugins/weighted_sum.so"
+    model_weights:
+      %s: 0.25
+      %s: 0.25
+    waf_weight: 0.5
+    params:
+      threshold: "0.5"
+crs_version: "4.4.0-dev"
+exception_ids:
+  RequestHeaders: 100
+  RequestBody: 200
+  AllRequest: 300
+  ResponseHeaders: 400
+  ResponseBody: 500
+  AllResponse: 600
+`, natsURL, model1, model2, model1, model2)
+	configPath := filepath.Join(b.TempDir(), "waceconfig.yaml")
+	if err := os.WriteFile(configPath, []byte(conf), 0o644); err != nil {
+		b.Fatalf("Error writing config: %v", err)
 	}
 
-	for i := 0; i < b.N; i++ {
-		tx := waf.NewTransaction()
-		if tx == nil {
-			b.Errorf("Error creating transaction")
-		}
-		tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
-		tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
-		tx.SetServerName("Apache")
-		tx.ProcessRequestHeaders()
-		body := "test"
-		reader := strings.NewReader(body)
-		tx.ReadRequestBodyFrom(reader)
-		tx.ProcessRequestBody()
-		tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
-		tx.ProcessResponseHeaders(200, "HTTP/1.1")
-		tx.WriteResponseBody([]byte(body))
-		tx.ProcessResponseBody()
-		tx.ProcessLogging()
+	waf := newBenchWaceWAF(b, configPath)
+	// give the subscriptions time to reach the server
+	time.Sleep(100 * time.Millisecond)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		runBenchTransaction(b, waf)
 	}
 }
 
+// BenchmarkCorazaTransactions is the baseline: the same transaction on
+// plain Coraza with the CRS, without WACE.
 func BenchmarkCorazaTransactions(b *testing.B) {
-	wafConfig := coraza.NewWAFConfig()
-	wafConfig = wafConfig.WithDirectivesFromFile("../coraza.conf").
-		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("../coreruleset/rules/*.conf")
-	waf, err := coraza.NewWAF(wafConfig)
-	if err != nil {
-		b.Errorf("Error creating WAF: %v", err.Error())
+	waf := newBenchCorazaWAF(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		runBenchTransaction(b, waf)
 	}
-	for i := 0; i < b.N; i++ {
-		tx := waf.NewTransaction()
-		if tx == nil {
-			b.Errorf("Error creating transaction")
+}
+
+// BenchmarkCorazaTransactionsParallel is the baseline of
+// BenchmarkWaceTransactionsParallel.
+func BenchmarkCorazaTransactionsParallel(b *testing.B) {
+	waf := newBenchCorazaWAF(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			runBenchTransaction(b, waf)
 		}
-		tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
-		tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
-		tx.SetServerName("Apache")
-		tx.ProcessRequestHeaders()
-		body := "test"
-		reader := strings.NewReader(body)
-		tx.ReadRequestBodyFrom(reader)
-		tx.ProcessRequestBody()
-		tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
-		tx.ProcessResponseHeaders(200, "HTTP/1.1")
-		tx.WriteResponseBody([]byte(body))
-		tx.ProcessResponseBody()
-		tx.ProcessLogging()
-	}
+	})
 }

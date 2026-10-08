@@ -9,7 +9,41 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Vet
+      run: go vet ./...
+
+    - name: Format
+      run: |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "Files not formatted with gofmt:"
+          echo "$unformatted"
+          exit 1
+        fi
+
+    - name: Tidy
+      run: |
+        go mod tidy
+        git diff --exit-code go.mod go.sum
 
   build:
     runs-on: ubuntu-latest
@@ -23,3 +57,17 @@ jobs:
 
     - name: Test
       run: go run mage.go test
+
+  # Uses mage because a -race test binary only loads plugins built with -race.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Test (race detector)
+      run: go run mage.go testRace
