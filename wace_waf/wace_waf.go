@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -697,8 +698,6 @@ func (t WaceTransaction) ProcessLogging() {
 	t.Transaction.ProcessLogging()
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	wace.CloseTransaction(t.Transaction.ID())
-
 	m := getMetrics()
 	m.crsDuration.Record(ctx, time.Duration(*t.CRSExecTime).Seconds())
 	getLogger().Debug("CRS execution time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.CRSExecTime))
@@ -712,6 +711,25 @@ func (t WaceTransaction) ProcessLogging() {
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 	m.integrationDuration.Record(ctx, time.Duration(*t.IntegrationTime).Seconds())
 	getLogger().Debug("integration time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.IntegrationTime))
+}
+
+// Close implements the io.Closer interface provided by Coraza WAF to release
+// the resources of the transaction in WACE, the exceptions transaction and
+// Coraza.
+func (t WaceTransaction) Close() error {
+	// The ID is read before closing the Coraza transaction, which returns it
+	// to the pool.
+	wace.CloseTransaction(t.Transaction.ID())
+	getLogger().Debug("WACEWAF transaction closed", waceapi.LogKeyTxID, t.Transaction.ID())
+
+	var errs []error
+	if err := t.exceptionTransaction.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("closing the exceptions transaction: %w", err))
+	}
+	if err := t.Transaction.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("closing the transaction: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // bodyString returns the content of a Coraza body buffer as a string. It

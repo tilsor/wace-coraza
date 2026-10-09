@@ -123,6 +123,7 @@ func TestTransactionRecordsMetrics(t *testing.T) {
 	reader := useManualReader(t)
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.ProcessRequestHeaders()

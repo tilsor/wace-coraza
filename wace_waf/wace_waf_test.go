@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
+	"github.com/corazawaf/coraza/v3/types"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
@@ -84,6 +86,7 @@ func TestTransactionAddData(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -158,6 +161,7 @@ func TestTransactionWithIDAddData(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 	tx := waf.NewTransactionWithID("1234567890123456")
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -230,6 +234,7 @@ func TestTransactionProcess(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -301,6 +306,7 @@ func TestBlockTransactions(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -378,6 +384,7 @@ func TestBlockTransactionsBlockingDisabled(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -435,6 +442,7 @@ func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.SetServerName("Apache")
@@ -475,6 +483,7 @@ func TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking(t *testing.T
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.SetServerName("Apache")
@@ -518,6 +527,7 @@ func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tx := waf.NewTransaction()
+			defer tx.Close()
 			tx.ProcessURI(tt.uri, "GET", "HTTP/1.1")
 			tx.AddRequestHeader("Host", "test")
 			i := tx.ProcessRequestHeaders()
@@ -552,6 +562,7 @@ func TestBlockTransactionsEverythingModel(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
@@ -659,6 +670,7 @@ func testExceptions(t *testing.T, exceptionsFile string) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tx := waf.NewTransaction()
+			defer tx.Close()
 			if tx == nil {
 				t.Fatal("Error creating transaction")
 			}
@@ -755,6 +767,7 @@ func TestWithExceptionsFromFile(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090/trivialRequestHeaders", "GET", "HTTP/1.1")
@@ -823,6 +836,7 @@ func TestTrainingModelNotUsedInDecision(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.AddRequestHeader("Host", "Test")
@@ -880,6 +894,7 @@ func newBenchCorazaWAF(b *testing.B) coraza.WAF {
 // the same way the Coraza HTTP middleware does.
 func runBenchTransaction(b *testing.B, waf coraza.WAF) {
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
@@ -1038,6 +1053,7 @@ func TestRequestBodyWithExceptions(t *testing.T) {
 	waf := newExceptionsBodyWAF(t)
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090", "POST", "HTTP/1.1")
@@ -1079,6 +1095,7 @@ func TestResponseBodyChunks(t *testing.T) {
 	waf := newExceptionsBodyWAF(t)
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
@@ -1142,6 +1159,7 @@ func TestRequestBodyProcessPartial(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090", "POST", "HTTP/1.1")
@@ -1170,5 +1188,43 @@ func TestRequestBodyProcessPartial(t *testing.T) {
 	}
 	if string(rest) != body[limit:] {
 		t.Errorf("expected the rest of the body %q left in the reader, got %q", body[limit:], rest)
+	}
+}
+
+// closeRecorderTx is a Coraza transaction that records when it is closed.
+// Only ID and Close are implemented.
+type closeRecorderTx struct {
+	types.Transaction
+	name   string
+	err    error
+	closed *[]string
+}
+
+func (tx closeRecorderTx) ID() string { return "close-test" }
+
+func (tx closeRecorderTx) Close() error {
+	*tx.closed = append(*tx.closed, tx.name)
+	return tx.err
+}
+
+// TestCloseClosesBothTransactions verifies that Close closes the exceptions
+// and the main transactions, even if closing the first one fails, and returns
+// the errors of both.
+func TestCloseClosesBothTransactions(t *testing.T) {
+	var closed []string
+	errExceptions := errors.New("exceptions error")
+	errMain := errors.New("main error")
+	tx := WaceTransaction{
+		Transaction:          closeRecorderTx{name: "main", err: errMain, closed: &closed},
+		exceptionTransaction: closeRecorderTx{name: "exceptions", err: errExceptions, closed: &closed},
+	}
+
+	err := tx.Close()
+
+	if expected := []string{"exceptions", "main"}; !reflect.DeepEqual(closed, expected) {
+		t.Errorf("expected closed transactions %q, got %q", expected, closed)
+	}
+	if !errors.Is(err, errExceptions) || !errors.Is(err, errMain) {
+		t.Errorf("expected both close errors, got %v", err)
 	}
 }
