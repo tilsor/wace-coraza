@@ -569,7 +569,7 @@ var exceptionsModelsByType = map[string]string{
 func exceptionsActiveModels(tx types.Transaction, exceptionType string) ([]string, bool) {
 	for _, rule := range tx.(WaceTransaction).exceptionTransaction.MatchedRules() {
 		if rule.Rule().ID() == gConfig.ruleIdsForExceptions[exceptionType] {
-			return ParseActiveModels(rule.Message()), true
+			return parseActiveModels(rule.Message()), true
 		}
 	}
 	return nil, false
@@ -579,16 +579,35 @@ func exceptionsActiveModels(tx types.Transaction, exceptionType string) ([]strin
 // whose exception is triggered, in every phase. With a URI that triggers no
 // exception, every model must remain active; with a URI containing a model id,
 // that model must be reported as inactive while the others stay active.
+//
+// It runs against two exceptions files: one where every exception rule runs in
+// phase 1, and one where each rule runs in the phase of its model type. The
+// latter checks that the rule reporting the active models of a type runs in
+// that type's phase: if it ran earlier, it would report the models as active
+// before a later-phase exception disabled them.
 func TestExceptions(t *testing.T) {
+	exceptionsFiles := []string{
+		"testdata/config/waceexceptions.conf",
+		"testdata/config/waceexceptions_phases.conf",
+	}
+	for _, exceptionsFile := range exceptionsFiles {
+		t.Run(filepath.Base(exceptionsFile), func(t *testing.T) {
+			testExceptions(t, exceptionsFile)
+		})
+	}
+}
+
+func testExceptions(t *testing.T, exceptionsFile string) {
 	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
 	defer resetWACE()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+	wafConf := NewWaceWAFConfig().
+		WithExceptionsFromFile(exceptionsFile).
+		WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
-		WithDirectivesFromFile("../coreruleset/rules/*.conf").
-		WithDirectivesFromFile("testdata/config/waceexceptions.conf")
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
 	waf, err := NewWAF(wafConf)
 	if err != nil {
