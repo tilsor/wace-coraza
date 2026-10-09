@@ -34,7 +34,44 @@ func TestNewMetricsOTLPWithURL(t *testing.T) {
 	if _, ok := m.provider.(*sdkmetric.MeterProvider); !ok {
 		t.Errorf("expected an SDK provider, got %T", m.provider)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	m.shutdown(ctx)
+}
+
+func TestNewResourceServiceName(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	res, err := newResource(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := res.Set().Value(semconv.ServiceNameKey); got.AsString() != serviceName {
+		t.Errorf("expected service name %q, got %q", serviceName, got.AsString())
+	}
+	if _, ok := res.Set().Value(semconv.TelemetrySDKNameKey); !ok {
+		t.Errorf("expected the telemetry SDK attributes, got %v", res)
+	}
+}
+
+func TestNewResourceServiceNameFromEnv(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "my-waf")
+	res, err := newResource(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := res.Set().Value(semconv.ServiceNameKey); got.AsString() != "my-waf" {
+		t.Errorf("expected service name %q from the environment, got %q", "my-waf", got.AsString())
+	}
+}
+
+func TestNewMetricsMalformedResourceAttributes(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "malformed")
+	m, err := newMetrics(context.Background(), "localhost:4317")
+	if err != nil {
+		t.Fatalf("a malformed OTEL_RESOURCE_ATTRIBUTES should not fail, got: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	m.shutdown(ctx)
 }

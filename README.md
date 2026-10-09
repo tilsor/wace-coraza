@@ -10,7 +10,7 @@
 This section provides details on each field within the configuration files and their purposes. These configurations are necessary to control how the system processes requests, handles plugins, manages logging, and more.
 
 ### File: waceconfig.yaml
-Logging is not configured in this file. Call `waceWAF.SetLogger` with a `*slog.Logger` before `NewWAF` (by default `slog.Default()` is used). The logger must not carry a `component` attribute: WACE WAF logs with `component=waf` and the WACE core adds its own.
+Logging is not configured in this file. Call `waceWAF.SetLogger` with a `*slog.Logger` before `NewWAF` (by default `slog.Default()` is used). The logger must not carry a `component` attribute: WACE WAF logs with `component=wace-waf` and the WACE core adds its own.
 
 **Plugins configuration**
 - model_plugins: Defines the plugins used for processing transactions.
@@ -31,7 +31,7 @@ Logging is not configured in this file. Call `waceWAF.SetLogger` with a `*slog.L
 **Network and Options**
 
 - natsurl (String): URL for the NATS server, which handles messaging between components. Default format is hostname:port.
-- otel_url (String): URL for the OpenTelemetry collector in order to send metrics.
+- otel_url (String, optional): address of the OTLP gRPC receiver of an OpenTelemetry Collector, as `host:port` (e.g. `localhost:4317`). When set, the metrics of WACE WAF and of the WACE core are exported there every 2 seconds, without TLS. When empty or missing, no metrics are recorded. It can be changed by a reload: the new address is used once the new configuration is accepted, and the metrics still pending for the old one are flushed.
 - crs_version (String): version of the OWASP CRS in use.
 - early_blocking (Boolean): enables or disables early blocking of requests.
 - blocking (Boolean): enables or disables denying transactions based on the WACE decision plugin's result. When false, transactions are still analyzed and scored, but never denied. If a per-app waceappconfig.yaml is used, its own `blocking` value takes priority over this one.

@@ -35,6 +35,10 @@ decision_plugins:
       max_samples: 10
       result_file_path: "/tmp/training_results.ndjson"
 
+# OTLP gRPC receiver of an OpenTelemetry Collector (host:port). Without it,
+# no metrics are recorded.
+# otel_url: "localhost:4317"
+
 crs_version: "4.4.0-dev"
 early_blocking: false
 blocking: true

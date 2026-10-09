@@ -16,8 +16,9 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// meterScope is the instrumentation scope name of the WACE WAF metrics.
-const meterScope = "waceWAF"
+// meterScope is the instrumentation scope name of the WACE WAF metrics: its
+// import path, as recommended by OpenTelemetry.
+const meterScope = "github.com/tilsor/wace-coraza/wace_waf"
 
 // attrPhase is the attribute key of the Coraza phase, from 1 to 4.
 const attrPhase = "phase"
@@ -119,7 +120,21 @@ func init() {
 	currentMetrics.Store(newNoopMetrics())
 }
 
-var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
+// serviceName is the default service.name of the exported metrics. The
+// OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES environment variables
+// override it.
+const serviceName = "wace-waf"
+
+// newResource returns the resource of the exported metrics: the SDK
+// attributes, the service name and the attributes of the environment, which
+// take priority.
+func newResource(ctx context.Context) (*resource.Resource, error) {
+	return resource.New(ctx,
+		resource.WithTelemetrySDK(),
+		resource.WithAttributes(semconv.ServiceName(serviceName)),
+		resource.WithFromEnv(),
+	)
+}
 
 // newNoopMetrics returns a metrics state that records nothing.
 func newNoopMetrics() *metricsState {
@@ -141,8 +156,11 @@ func newMetrics(ctx context.Context, url string) (*metricsState, error) {
 		return newNoopMetrics(), nil
 	}
 
-	res, err := resource.New(ctx, resource.WithAttributes(serviceName))
-	if err != nil {
+	res, err := newResource(ctx)
+	if errors.Is(err, resource.ErrPartialResource) {
+		// a malformed environment variable does not prevent exporting
+		getLogger().Error("error reading the metrics resource attributes", "error", err)
+	} else if err != nil {
 		return nil, fmt.Errorf("failed to create metrics resource: %w", err)
 	}
 
