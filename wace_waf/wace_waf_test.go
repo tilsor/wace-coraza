@@ -72,7 +72,8 @@ func TestNewWaf(t *testing.T) {
 }
 
 func TestTransactionAddData(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
+	// Every model type is configured, so the payload has every field.
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
 	defer resetWACE()
@@ -147,7 +148,8 @@ func TestTransactionAddData(t *testing.T) {
 }
 
 func TestTransactionWithIDAddData(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
+	// Every model type is configured, so the payload has every field.
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
 	defer resetWACE()
@@ -1226,5 +1228,134 @@ func TestCloseClosesBothTransactions(t *testing.T) {
 	}
 	if !errors.Is(err, errExceptions) || !errors.Is(err, errMain) {
 		t.Errorf("expected both close errors, got %v", err)
+	}
+}
+
+// TestCloseWithoutExceptions verifies that Close only closes the main
+// transaction when there is no exceptions transaction.
+func TestCloseWithoutExceptions(t *testing.T) {
+	var closed []string
+	tx := WaceTransaction{
+		Transaction: closeRecorderTx{name: "main", closed: &closed},
+	}
+
+	if err := tx.Close(); err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if expected := []string{"main"}; !reflect.DeepEqual(closed, expected) {
+		t.Errorf("expected closed transactions %q, got %q", expected, closed)
+	}
+}
+
+// TestNoExceptionsTransaction verifies that no exceptions WAF nor
+// exceptions transactions are created without an exceptions file.
+func TestNoExceptionsTransaction(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer resetWACE()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+	if waf.exceptionWAF != nil {
+		t.Errorf("expected no exceptions WAF without an exceptions file")
+	}
+
+	for name, tx := range map[string]types.Transaction{
+		"NewTransaction":       waf.NewTransaction(),
+		"NewTransactionWithID": waf.NewTransactionWithID("no-exceptions-tx"),
+	} {
+		if tx.(WaceTransaction).exceptionTransaction != nil {
+			t.Errorf("%s: expected no exceptions transaction without an exceptions file", name)
+		}
+		if err := tx.Close(); err != nil {
+			t.Errorf("%s: Error closing transaction: %v", name, err)
+		}
+	}
+}
+
+// TestBodiesOnlyReadForModels verifies that a body is only read from the
+// Coraza buffer when a model gets it.
+func TestBodiesOnlyReadForModels(t *testing.T) {
+	tests := []struct {
+		configFile   string
+		requestBody  bool
+		responseBody bool
+	}{
+		// RequestHeaders and RequestBody models.
+		{configFile: "testdata/config/waceconfig.yaml", requestBody: true, responseBody: false},
+		// A single Everything model.
+		{configFile: "testdata/config/waceconfig_everything_block.yaml", requestBody: true, responseBody: true},
+	}
+	for _, tt := range tests {
+		t.Run(filepath.Base(tt.configFile), func(t *testing.T) {
+			testBodiesOnlyReadForModels(t, tt.configFile, tt.requestBody, tt.responseBody)
+		})
+	}
+}
+
+func testBodiesOnlyReadForModels(t *testing.T, configFile string, requestBody, responseBody bool) {
+	configFilePath = configFile
+	gConfig = nil
+
+	defer resetWACE()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+	}
+	body := "test"
+	if _, _, err := tx.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+		t.Fatalf("Error reading request body: %v", err.Error())
+	}
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		t.Fatalf("Error processing request body: %v", err.Error())
+	}
+	tx.AddResponseHeader("content-type", "text/plain")
+	if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+		t.Fatalf("response headers should not be blocked, got interruption: %v", i)
+	}
+	if _, _, err := tx.WriteResponseBody([]byte(body)); err != nil {
+		t.Fatalf("Error writing response body: %v", err.Error())
+	}
+	// The Everything model may block the transaction: only the payload is
+	// checked here.
+	if _, err := tx.ProcessResponseBody(); err != nil {
+		t.Fatalf("Error processing response body: %v", err.Error())
+	}
+
+	expected := func(read bool) string {
+		if read {
+			return body
+		}
+		return ""
+	}
+	payload := tx.(WaceTransaction).httpPayload
+	if payload.RequestBody != expected(requestBody) {
+		t.Errorf("expected request body %q, got %q", expected(requestBody), payload.RequestBody)
+	}
+	if payload.ResponseBody != expected(responseBody) {
+		t.Errorf("expected response body %q, got %q", expected(responseBody), payload.ResponseBody)
 	}
 }

@@ -32,6 +32,7 @@ const (
 // WaceWAF implements the WAF interface provided by Coraza WAF and adds the WACE functionality to it
 type WaceWAF struct {
 	coraza.WAF
+	// exceptionWAF is nil if there is no exceptions file.
 	exceptionWAF  coraza.WAF
 	waceWafConfig *WaceWAFConfig
 }
@@ -39,6 +40,7 @@ type WaceWAF struct {
 // WaceTransaction implements the Transaction interface provided by Coraza WAF and adds the WACE functionality to it
 type WaceTransaction struct {
 	types.Transaction
+	// exceptionTransaction is nil if there is no exceptions file.
 	exceptionTransaction types.Transaction
 	waf                  *WaceWAF
 	httpPayload          *waceapi.HTTPPayload
@@ -219,17 +221,16 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		return nil, err
 	}
 
+	var exceptionsWaf coraza.WAF
 	if wafConfigs.exceptionsFilePath != "" {
 		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives(wafConfigs.exceptionsFilePath, wafConfigs.waceModels)
+		exceptionsWaf, err = coraza.NewWAF(wafConfigs.exceptionsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("Error loading exceptions file %s: %v", wafConfigs.exceptionsFilePath, err)
+		}
 	}
 
-	exceptionsWaf, err := coraza.NewWAF(wafConfigs.exceptionsConfig)
-
-	if err != nil {
-		return nil, fmt.Errorf("Error loading exceptions file %s: %v", wafConfigs.exceptionsFilePath, err)
-	}
-
-	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, err
+	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, nil
 }
 
 // NewTransaction implements the NewTransaction interface provided by Coraza WAF to create a new WaceTransaction
@@ -242,7 +243,11 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
 	wace.InitTransaction(CRSTransaction.ID())
-	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransaction(), w, new(waceapi.HTTPPayload), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
+	var exceptionTransaction types.Transaction
+	if w.exceptionWAF != nil {
+		exceptionTransaction = w.exceptionWAF.NewTransaction()
+	}
+	t := WaceTransaction{CRSTransaction, exceptionTransaction, w, new(waceapi.HTTPPayload), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
 	getLogger().Debug("new WACEWAF transaction created", waceapi.LogKeyTxID, CRSTransaction.ID())
 	return t
 }
@@ -257,7 +262,11 @@ func (w *WaceWAF) NewTransactionWithID(id string) types.Transaction {
 	var integrationTime int64 = time.Since(start).Nanoseconds()
 	var crsTime int64 = time.Since(start).Nanoseconds()
 	wace.InitTransaction(CRSTransaction.ID())
-	t := WaceTransaction{CRSTransaction, w.exceptionWAF.NewTransactionWithID(id), w, new(waceapi.HTTPPayload), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
+	var exceptionTransaction types.Transaction
+	if w.exceptionWAF != nil {
+		exceptionTransaction = w.exceptionWAF.NewTransactionWithID(id)
+	}
+	t := WaceTransaction{CRSTransaction, exceptionTransaction, w, new(waceapi.HTTPPayload), &crsTime, &integrationTime, start, new(sync.WaitGroup)}
 	getLogger().Debug("new WACEWAF transaction created", waceapi.LogKeyTxID, CRSTransaction.ID())
 	return t
 }
@@ -268,7 +277,9 @@ func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion strin
 	t.Transaction.ProcessURI(uri, method, httpVersion)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	t.exceptionTransaction.ProcessURI(uri, method, httpVersion)
+	if t.hasExceptions() {
+		t.exceptionTransaction.ProcessURI(uri, method, httpVersion)
+	}
 	t.httpPayload.URI = uri
 	t.httpPayload.Method = method
 	t.httpPayload.HTTPVersion = httpVersion
@@ -299,7 +310,9 @@ func (t WaceTransaction) AddRequestHeader(key string, value string) {
 	t.Transaction.AddRequestHeader(key, value)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	t.exceptionTransaction.AddRequestHeader(key, value)
+	if t.hasExceptions() {
+		t.exceptionTransaction.AddRequestHeader(key, value)
+	}
 	t.httpPayload.RequestHeaders = append(t.httpPayload.RequestHeaders, waceapi.HTTPHeader{Key: key, Value: value})
 	// *t.requestHeaders += key + ": " + value + "\n"
 
@@ -319,7 +332,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 
 		var activeModels []string
 
-		if t.waf.waceWafConfig.exceptionsFilePath != "" {
+		if t.hasExceptions() {
 			t.exceptionTransaction.ProcessRequestHeaders()
 			activeModels, _ = t.exceptionActiveModels(cs.RequestHeaders)
 		} else {
@@ -408,11 +421,15 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 
 	// Read before starting the goroutine: the Coraza body buffer is not safe
 	// for concurrent readers.
-	body, err := bodyString(t.Transaction.RequestBodyReader())
-	if err != nil {
-		getLogger().Error("error reading request body buffer", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+	var body string
+	if t.needsRequestBody() {
+		var err error
+		body, err = bodyString(t.Transaction.RequestBodyReader())
+		if err != nil {
+			getLogger().Error("error reading request body buffer", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+		t.httpPayload.RequestBody = body
 	}
-	t.httpPayload.RequestBody = body
 
 	// The models get a copy: ResponseCode is written below while they run.
 	payload := *t.httpPayload
@@ -421,9 +438,11 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		var activeRequestBodyModels []string
 		var activeRequestModels []string
 
-		if t.waf.waceWafConfig.exceptionsFilePath != "" {
-			if _, _, err := t.exceptionTransaction.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
-				getLogger().Error("error writing request body to the exceptions transaction", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		if t.hasExceptions() {
+			if body != "" {
+				if _, _, err := t.exceptionTransaction.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+					getLogger().Error("error writing request body to the exceptions transaction", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+				}
 			}
 			t.exceptionTransaction.ProcessRequestBody()
 			activeRequestBodyModels, _ = t.exceptionActiveModels(cs.RequestBody)
@@ -501,7 +520,9 @@ func (t WaceTransaction) AddResponseHeader(key string, value string) {
 	t.Transaction.AddResponseHeader(key, value)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	t.exceptionTransaction.AddResponseHeader(key, value)
+	if t.hasExceptions() {
+		t.exceptionTransaction.AddResponseHeader(key, value)
+	}
 	t.httpPayload.ResponseHeaders = append(t.httpPayload.ResponseHeaders, waceapi.HTTPHeader{Key: key, Value: value})
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
@@ -521,7 +542,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 
 		var activeModels []string
 
-		if t.waf.waceWafConfig.exceptionsFilePath != "" {
+		if t.hasExceptions() {
 			t.exceptionTransaction.ProcessResponseHeaders(code, proto)
 			activeModels, _ = t.exceptionActiveModels(cs.ResponseHeaders)
 		} else {
@@ -599,11 +620,15 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 
 	// Read before starting the goroutine: the Coraza body buffer is not safe
 	// for concurrent readers.
-	body, err := bodyString(t.Transaction.ResponseBodyReader())
-	if err != nil {
-		getLogger().Error("error reading response body buffer", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+	var body string
+	if t.needsResponseBody() {
+		var err error
+		body, err = bodyString(t.Transaction.ResponseBodyReader())
+		if err != nil {
+			getLogger().Error("error reading response body buffer", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+		t.httpPayload.ResponseBody = body
 	}
-	t.httpPayload.ResponseBody = body
 
 	t.coordinator.Add(1)
 	go func() {
@@ -612,9 +637,11 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		var activeResponseModels []string
 		var activeEverythingModels []string
 
-		if t.waf.waceWafConfig.exceptionsFilePath != "" {
-			if _, _, err := t.exceptionTransaction.ReadResponseBodyFrom(strings.NewReader(body)); err != nil {
-				getLogger().Error("error writing response body to the exceptions transaction", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		if t.hasExceptions() {
+			if body != "" {
+				if _, _, err := t.exceptionTransaction.ReadResponseBodyFrom(strings.NewReader(body)); err != nil {
+					getLogger().Error("error writing response body to the exceptions transaction", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+				}
 			}
 			t.exceptionTransaction.ProcessResponseBody()
 			activeResponseBodyModels, _ = t.exceptionActiveModels(cs.ResponseBody)
@@ -723,8 +750,10 @@ func (t WaceTransaction) Close() error {
 	getLogger().Debug("WACEWAF transaction closed", waceapi.LogKeyTxID, t.Transaction.ID())
 
 	var errs []error
-	if err := t.exceptionTransaction.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("closing the exceptions transaction: %w", err))
+	if t.hasExceptions() {
+		if err := t.exceptionTransaction.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing the exceptions transaction: %w", err))
+		}
 	}
 	if err := t.Transaction.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("closing the transaction: %w", err))
@@ -743,6 +772,49 @@ func bodyString(r io.Reader, err error) (string, error) {
 		return "", err
 	}
 	return sb.String(), nil
+}
+
+// requestBodyModelTypes are the model types whose payload has the request body.
+var requestBodyModelTypes = []cs.ModelPluginType{cs.RequestBody, cs.AllRequest, cs.Everything}
+
+// responseBodyModelTypes are the model types whose payload has the response
+// body. Their exception rules are the only ones evaluated after the response
+// body is read.
+var responseBodyModelTypes = []cs.ModelPluginType{cs.ResponseBody, cs.AllResponse, cs.Everything}
+
+// requestBodyExceptionTypes are the model types whose exception rules are
+// evaluated after the request body is read, so they may inspect it.
+var requestBodyExceptionTypes = []cs.ModelPluginType{
+	cs.RequestBody, cs.AllRequest, cs.ResponseHeaders, cs.ResponseBody, cs.AllResponse, cs.Everything,
+}
+
+// hasModels reports whether the WAF has models of any of the types mts.
+func (t WaceTransaction) hasModels(mTypes []cs.ModelPluginType) bool {
+	for _, mt := range mTypes {
+		if len(t.waf.waceWafConfig.waceModels[mt]) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// needsRequestBody reports whether the request body has to be read from the
+// Coraza buffer: a model gets it, or an exception rule may inspect it.
+func (t WaceTransaction) needsRequestBody() bool {
+	return t.hasModels(requestBodyModelTypes) ||
+		(t.hasExceptions() && t.hasModels(requestBodyExceptionTypes))
+}
+
+// needsResponseBody reports whether the response body has to be read from
+// the Coraza buffer: a model gets it, or an exception rule may inspect it.
+func (t WaceTransaction) needsResponseBody() bool {
+	return t.hasModels(responseBodyModelTypes)
+}
+
+// hasExceptions reports whether the transaction has an exceptions
+// transaction, that is, whether the WAF has an exceptions file.
+func (t WaceTransaction) hasExceptions() bool {
+	return t.exceptionTransaction != nil
 }
 
 // exceptionActiveModels returns the models of type mt reported as active by
