@@ -2,8 +2,10 @@ package waceWAF
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -13,7 +15,7 @@ import (
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/debuglog"
 	"github.com/corazawaf/coraza/v3/types"
-	cf "github.com/tilsor/ModSecIntl_wace_lib/configstore"
+	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 )
 
 // generalConfig is the struct that holds the general configuration of the WAF
@@ -45,22 +47,23 @@ type WaceWAFConfig struct {
 
 // WaceModels holds the model ids for the different types of models
 type WaceModels struct {
-	reqHeadModelIDs  []string
-	reqBodyModelIDs  []string
-	reqModelIDs      []string
-	respHeadModelIDs []string
-	respBodyModelIDs []string
-	respModelIDs     []string
+	reqHeadModelIDs    []string
+	reqBodyModelIDs    []string
+	reqModelIDs        []string
+	respHeadModelIDs   []string
+	respBodyModelIDs   []string
+	respModelIDs       []string
+	everythingModelIDs []string
 }
 
 // waceGeneralConfigFileData holds the general configuration data from the config file
 type waceGeneralConfigFileData struct {
-	cf.ConfigFileData `yaml:",inline"`
-	EarlyBlocking     bool           `yaml:"early_blocking"`
-	CRSVersion        string         `yaml:"crs_version"`
-	Blocking          bool           `yaml:"blocking"`
-	OtelURL           string         `yaml:"otel_url"`
-	ExceptionIDs      map[string]int `yaml:"exception_ids"`
+	configstore.ConfigFileData `yaml:",inline"`
+	EarlyBlocking              bool           `yaml:"early_blocking"`
+	CRSVersion                 string         `yaml:"crs_version"`
+	Blocking                   bool           `yaml:"blocking"`
+	OtelURL                    string         `yaml:"otel_url"`
+	ExceptionIDs               map[string]int `yaml:"exception_ids"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
@@ -91,12 +94,7 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	g.crsVersion = confData.CRSVersion
 	g.blocking = confData.Blocking
 	g.otelURL = confData.OtelURL
-	if g.ruleIdsForExceptions == nil {
-		g.ruleIdsForExceptions = make(map[string]int)
-	}
-	for key, value := range confData.ExceptionIDs {
-		g.ruleIdsForExceptions[key] = value
-	}
+	g.ruleIdsForExceptions = maps.Clone(confData.ExceptionIDs)
 
 	return confData, err
 }
@@ -151,7 +149,7 @@ func (w *WaceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 
 // getDefaultPlugins gets the list of non-training plugin IDs from WACE ConfigStore after they were validated
 func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (*WaceModels, string, error) {
-	cs, err := cf.Get()
+	cs, err := configstore.Get()
 	if err != nil {
 		return &WaceModels{}, "", err
 	}
@@ -162,21 +160,25 @@ func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (*WaceModels, strin
 	models.respHeadModelIDs = []string{}
 	models.respBodyModelIDs = []string{}
 	models.respModelIDs = []string{}
+	models.everythingModelIDs = []string{}
 	for _, model := range cs.ModelPlugins {
+		// We do not want to collect data for every new application, only for the indended ones.
 		if !model.Training {
 			switch model.PluginType {
-			case cf.RequestHeaders:
+			case configstore.RequestHeaders:
 				models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
-			case cf.RequestBody:
+			case configstore.RequestBody:
 				models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
-			case cf.AllRequest:
+			case configstore.AllRequest:
 				models.reqModelIDs = append(models.reqModelIDs, model.ID)
-			case cf.ResponseHeaders:
+			case configstore.ResponseHeaders:
 				models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
-			case cf.ResponseBody:
+			case configstore.ResponseBody:
 				models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
-			case cf.AllResponse:
+			case configstore.AllResponse:
 				models.respModelIDs = append(models.respModelIDs, model.ID)
+			case configstore.Everything:
+				models.everythingModelIDs = append(models.everythingModelIDs, model.ID)
 			}
 		}
 	}
@@ -209,9 +211,8 @@ func (g *generalConfig) setDefaultPlugins(loadedConf waceGeneralConfigFileData) 
 
 // newWacePluginsConfig creates a new WaceModels with the models with the given ids
 // using the models stored in the WACE ConfigStore
-// TODO: improve error reporting for unknown models
 func newWacePluginsConfig(modelsIds []string, decisionIds []string) (*WaceModels, []string, error) {
-	cs, err := cf.Get()
+	cs, err := configstore.Get()
 	if err != nil {
 		return &WaceModels{}, []string{}, err
 	}
@@ -222,32 +223,46 @@ func newWacePluginsConfig(modelsIds []string, decisionIds []string) (*WaceModels
 	models.respHeadModelIDs = []string{}
 	models.respBodyModelIDs = []string{}
 	models.respModelIDs = []string{}
+	models.everythingModelIDs = []string{}
 	for _, id := range modelsIds {
 		if model, ok := cs.ModelPlugins[id]; ok {
 			switch model.PluginType {
-			case cf.RequestHeaders:
+			case configstore.RequestHeaders:
 				models.reqHeadModelIDs = append(models.reqHeadModelIDs, model.ID)
-			case cf.RequestBody:
+			case configstore.RequestBody:
 				models.reqBodyModelIDs = append(models.reqBodyModelIDs, model.ID)
-			case cf.AllRequest:
+			case configstore.AllRequest:
 				models.reqModelIDs = append(models.reqModelIDs, model.ID)
-			case cf.ResponseHeaders:
+			case configstore.ResponseHeaders:
 				models.respHeadModelIDs = append(models.respHeadModelIDs, model.ID)
-			case cf.ResponseBody:
+			case configstore.ResponseBody:
 				models.respBodyModelIDs = append(models.respBodyModelIDs, model.ID)
-			case cf.AllResponse:
+			case configstore.AllResponse:
 				models.respModelIDs = append(models.respModelIDs, model.ID)
+			case configstore.Everything:
+				models.everythingModelIDs = append(models.everythingModelIDs, model.ID)
+			default:
+				err = errors.Join(err, fmt.Errorf("Unknown model type: %s", model.PluginType))
 			}
+		} else {
+			err = errors.Join(err, fmt.Errorf("Unknown model: %s", id))
 		}
 	}
 
 	checkedDecisionIds := []string{}
+	activeFound := false
 	for _, id := range decisionIds {
-		if _, ok := cs.DecisionPlugins[id]; ok {
+		if dp, ok := cs.DecisionPlugins[id]; ok {
 			checkedDecisionIds = append(checkedDecisionIds, id)
+			activeFound = activeFound || !dp.Training
+		} else {
+			err = errors.Join(err, fmt.Errorf("Unknown decision: %s", id))
 		}
 	}
-	return models, checkedDecisionIds, nil
+	if !activeFound {
+		err = errors.Join(err, fmt.Errorf("Non-training decision plugin not found"))
+	}
+	return models, checkedDecisionIds, err
 }
 
 // reportingMsgTemplate is the msg of the SecAction that reports, per phase,
@@ -409,7 +424,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["RequestHeaders"]) + ", phase:1, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.RequestHeaders.String()]) + ", phase:1, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -420,7 +435,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["RequestBody"]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.RequestBody.String()]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -430,7 +445,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["AllRequest"]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.AllRequest.String()]) + ", phase:2, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -441,7 +456,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["ResponseHeaders"]) + ", phase:3, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.ResponseHeaders.String()]) + ", phase:3, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -452,7 +467,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["ResponseBody"]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.ResponseBody.String()]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 
 		modelsToGet = ""
@@ -462,7 +477,18 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 			modelsToSet += "setvar:tx." + model + "=true,"
 			modelsToGet += model + ":%{tx." + model + "},"
 		}
-		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions["AllResponse"]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.AllResponse.String()]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
+		finalsRules = append(finalsRules, finalRule)
+
+		modelsToGet = ""
+	}
+
+	if len(waceConfig.everythingModelIDs) != 0 {
+		for _, model := range waceConfig.everythingModelIDs {
+			modelsToSet += "setvar:tx." + model + "=true,"
+			modelsToGet += model + ":%{tx." + model + "},"
+		}
+		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.Everything.String()]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 	}
 	initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""

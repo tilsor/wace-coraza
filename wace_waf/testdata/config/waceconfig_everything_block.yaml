@@ -4,12 +4,8 @@
 
 #The model plugins configuration
 model_plugins:
-  - id: "trivial"
-    plugin_type: RequestHeaders
-    path: "testdata/plugins/trivial.so"
-    mode: sync
-  - id: "trivial2"
-    plugin_type: RequestBody
+  - id: "trivialEverything"
+    plugin_type: Everything
     path: "testdata/plugins/trivial2.so"
     mode: sync
 
@@ -17,14 +13,14 @@ decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
     model_weights:
-      trivial: 0.25
-      trivial2: 0.25
+      trivialEverything: 4
     waf_weight: 0.5
     params:
-      threshold: "0.5"
+      threshold: "0.7"
 
 crs_version: "4.4.0-dev"
-early_blocking: false
+early_blocking: true
+blocking: true
 
 exception_ids:
   RequestHeaders: 100

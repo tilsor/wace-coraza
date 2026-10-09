@@ -493,6 +493,64 @@ func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
 	}
 }
 
+// TestBlockTransactionsEverythingModel verifies that an Everything model is
+// only analyzed in phase 4: with it as the only model, phases 1 to 3 must not
+// block (only the low CRS anomaly score counts there), while phase 4 must block
+// because the model reports a 1.0 probability of attack and outweighs the WAF.
+func TestBlockTransactionsEverythingModel(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_everything_block.yaml"
+	gConfig = nil
+
+	defer resetWACE()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Errorf("request headers should not be blocked, got interruption: %v", i)
+	}
+
+	body := "test"
+	if _, _, err := tx.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+		t.Errorf("Error reading request body: %v", err.Error())
+	}
+	i, err := tx.ProcessRequestBody()
+	if err != nil {
+		t.Errorf("Error processing request body: %v", err.Error())
+	}
+	if i != nil {
+		t.Errorf("request body should not be blocked, got interruption: %v", i)
+	}
+
+	tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+		t.Errorf("response headers should not be blocked, got interruption: %v", i)
+	}
+
+	if _, _, err := tx.WriteResponseBody([]byte(body)); err != nil {
+		t.Errorf("Error writing response body: %v", err.Error())
+	}
+	i, err = tx.ProcessResponseBody()
+	if err != nil {
+		t.Errorf("Error processing response body: %v", err.Error())
+	}
+	if i == nil {
+		t.Errorf("response body should be blocked by the Everything model")
+	}
+}
+
 // exceptionsModelsByType maps each exception rule type to the only model of
 // that type declared in waceconfig_all_models.yaml. waceexceptions.conf
 // disables a model when the request URI contains its id.
@@ -503,6 +561,7 @@ var exceptionsModelsByType = map[string]string{
 	"ResponseHeaders": "trivialResponseHeaders",
 	"ResponseBody":    "trivialResponseBody",
 	"AllResponse":     "trivialAllResponse",
+	"Everything":      "trivialEverything",
 }
 
 // exceptionsActiveModels returns the models reported as active by the
@@ -547,6 +606,7 @@ func TestExceptions(t *testing.T) {
 		{name: "exception for trivialResponseHeaders", disabledModel: "trivialResponseHeaders"},
 		{name: "exception for trivialResponseBody", disabledModel: "trivialResponseBody"},
 		{name: "exception for trivialAllResponse", disabledModel: "trivialAllResponse"},
+		{name: "exception for trivialEverything", disabledModel: "trivialEverything"},
 	}
 
 	for _, tt := range tests {

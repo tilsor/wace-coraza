@@ -160,12 +160,13 @@ func TestNewConfig(t *testing.T) {
 	}
 
 	expected := &WaceModels{
-		reqHeadModelIDs:  []string{"trivial"},
-		reqBodyModelIDs:  []string{"trivial2"},
-		reqModelIDs:      []string{},
-		respHeadModelIDs: []string{},
-		respBodyModelIDs: []string{},
-		respModelIDs:     []string{},
+		reqHeadModelIDs:    []string{"trivial"},
+		reqBodyModelIDs:    []string{"trivial2"},
+		reqModelIDs:        []string{},
+		respHeadModelIDs:   []string{},
+		respBodyModelIDs:   []string{},
+		respModelIDs:       []string{},
+		everythingModelIDs: []string{},
 	}
 
 	if !reflect.DeepEqual(gConfig.waceModels, expected) {
@@ -562,12 +563,13 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 	}
 
 	expected := &WaceModels{
-		reqHeadModelIDs:  []string{"trivialRequestHeaders"},
-		reqBodyModelIDs:  []string{"trivialRequestBody"},
-		reqModelIDs:      []string{"trivialAllRequest"},
-		respHeadModelIDs: []string{"trivialResponseHeaders"},
-		respBodyModelIDs: []string{"trivialResponseBody"},
-		respModelIDs:     []string{"trivialAllResponse"},
+		reqHeadModelIDs:    []string{"trivialRequestHeaders"},
+		reqBodyModelIDs:    []string{"trivialRequestBody"},
+		reqModelIDs:        []string{"trivialAllRequest"},
+		respHeadModelIDs:   []string{"trivialResponseHeaders"},
+		respBodyModelIDs:   []string{"trivialResponseBody"},
+		respModelIDs:       []string{"trivialAllResponse"},
+		everythingModelIDs: []string{"trivialEverything"},
 	}
 
 	if !reflect.DeepEqual(gConfig.waceModels, expected) {
@@ -581,6 +583,7 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		"trivialResponseHeaders",
 		"trivialResponseBody",
 		"trivialAllResponse",
+		"trivialEverything",
 	}
 	results, decisionIds, err := newWacePluginsConfig(models, []string{"weighted_sum"})
 
