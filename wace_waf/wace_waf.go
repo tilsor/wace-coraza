@@ -19,7 +19,6 @@ import (
 	cs "github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
@@ -326,14 +325,9 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			activeModels = t.waf.waceWafConfig.waceModels[cs.RequestHeaders]
 		}
 
-		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting exceptions histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "1")))
-		}
+		getMetrics().recordExceptions(ctx, 1, start)
 
-		err = wace.Analyze(cs.RequestHeaders, t.Transaction.ID(), payload, activeModels)
+		err := wace.Analyze(cs.RequestHeaders, t.Transaction.ID(), payload, activeModels)
 		if err != nil {
 			getLogger().Error("error processing request headers by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
@@ -367,11 +361,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 					interruption = &types.Interruption{Action: "deny"}
 					t.httpPayload.ResponseCode = 403
 
-					blocked, err := getMeter().Int64Counter("http.client.request.blockedp1.total")
-					if err != nil {
-						panic(err)
-					}
-					blocked.Add(ctx, 1)
+					getMetrics().recordBlocked(ctx, 1)
 				}
 			}
 		}
@@ -402,8 +392,7 @@ func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, 
 	interruption2, cantB2, err := t.Transaction.ReadRequestBodyFrom(&buf)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	duration, err := getMeter().Float64Histogram("http.client.request.body.read.duration.nanoseconds")
-	duration.Record(ctx, (float64(time.Since(startTime).Nanoseconds())))
+	getMetrics().requestBodyReadDuration.Record(ctx, time.Since(startTime).Seconds())
 
 	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
 
@@ -429,16 +418,11 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			activeRequestBodyModels = t.waf.waceWafConfig.waceModels[cs.RequestBody]
 			activeRequestModels = t.waf.waceWafConfig.waceModels[cs.AllRequest]
 		}
-		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting exceptions histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "2")))
-		}
+		getMetrics().recordExceptions(ctx, 2, start)
 
 		getLogger().Debug("processing request body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
-		err = wace.Analyze(cs.RequestBody, t.Transaction.ID(), waceapi.HTTPPayload{RequestBody: payload.RequestBody}, activeRequestBodyModels)
+		err := wace.Analyze(cs.RequestBody, t.Transaction.ID(), waceapi.HTTPPayload{RequestBody: payload.RequestBody}, activeRequestBodyModels)
 		if err != nil {
 			getLogger().Error("error processing request body by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
@@ -487,11 +471,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 					interruption = &types.Interruption{Action: "deny"}
 					t.httpPayload.ResponseCode = 403
 
-					blocked, err := getMeter().Int64Counter("http.client.request.blockedp2.total")
-					if err != nil {
-						panic(err)
-					}
-					blocked.Add(ctx, 1)
+					getMetrics().recordBlocked(ctx, 2)
 				}
 			}
 		}
@@ -534,14 +514,9 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 			activeModels = t.waf.waceWafConfig.waceModels[cs.ResponseHeaders]
 		}
 
-		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting exceptions histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "3")))
-		}
+		getMetrics().recordExceptions(ctx, 3, start)
 
-		err = wace.Analyze(cs.ResponseHeaders, t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders}, activeModels)
+		err := wace.Analyze(cs.ResponseHeaders, t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders}, activeModels)
 		if err != nil {
 			getLogger().Error("error processing response headers by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
@@ -553,6 +528,10 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.coordinator.Wait()
+	// set after Wait: the WACE goroutine reads the backend response code
+	if interruption != nil {
+		t.httpPayload.ResponseCode = interruption.Status
+	}
 
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
@@ -572,12 +551,9 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 					getLogger().Debug("transaction blocked", waceapi.LogKeyTxID, t.Transaction.ID())
 
 					interruption = &types.Interruption{Action: "deny"}
+					t.httpPayload.ResponseCode = 403
 
-					blocked, err := getMeter().Int64Counter("http.client.request.blockedp3.total")
-					if err != nil {
-						panic(err)
-					}
-					blocked.Add(ctx, 1)
+					getMetrics().recordBlocked(ctx, 3)
 				}
 			}
 		}
@@ -603,8 +579,7 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 	interruption, cantB, err = t.Transaction.WriteResponseBody(b)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	duration, err := getMeter().Float64Histogram("http.client.response.body.read.duration.nanoseconds")
-	duration.Record(ctx, (float64(time.Since(startTime).Nanoseconds())))
+	getMetrics().responseBodyWriteDuration.Record(ctx, time.Since(startTime).Seconds())
 
 	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
 
@@ -633,16 +608,11 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			activeEverythingModels = t.waf.waceWafConfig.waceModels[cs.Everything]
 		}
 
-		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting exceptions histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "4")))
-		}
+		getMetrics().recordExceptions(ctx, 4, start)
 
 		getLogger().Debug("processing response body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
-		err = wace.Analyze(cs.ResponseBody, t.Transaction.ID(), waceapi.HTTPPayload{ResponseBody: t.httpPayload.ResponseBody}, activeResponseBodyModels)
+		err := wace.Analyze(cs.ResponseBody, t.Transaction.ID(), waceapi.HTTPPayload{ResponseBody: t.httpPayload.ResponseBody}, activeResponseBodyModels)
 		if err != nil {
 			getLogger().Error("error processing response body by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
@@ -668,6 +638,10 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
 	t.coordinator.Wait()
+	// set after Wait: the WACE goroutine reads the backend response code
+	if interruption != nil {
+		t.httpPayload.ResponseCode = interruption.Status
+	}
 
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
@@ -687,12 +661,9 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 					getLogger().Debug("transaction blocked", waceapi.LogKeyTxID, t.Transaction.ID())
 
 					interruption = &types.Interruption{Action: "deny"}
+					t.httpPayload.ResponseCode = 403
 
-					blocked, err := getMeter().Int64Counter("http.client.request.blockedp4.total")
-					if err != nil {
-						panic(err)
-					}
-					blocked.Add(ctx, 1)
+					getMetrics().recordBlocked(ctx, 4)
 				}
 			}
 		}
@@ -711,40 +682,19 @@ func (t WaceTransaction) ProcessLogging() {
 
 	wace.CloseTransaction(t.Transaction.ID())
 
-	go func() {
-		execTime, err := getMeter().Int64Histogram("http.client.request.processed.CRSExecTime.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting CRS histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			execTime.Record(ctx, *t.CRSExecTime)
-			getLogger().Debug("CRS execution time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.CRSExecTime))
-		}
+	m := getMetrics()
+	m.crsDuration.Record(ctx, time.Duration(*t.CRSExecTime).Seconds())
+	getLogger().Debug("CRS execution time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.CRSExecTime))
 
-		duration, err := getMeter().Float64Histogram("http.client.request.processed.duration.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting request histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			duration.Record(ctx, (float64(time.Since(t.startTime).Nanoseconds())))
-			getLogger().Debug("total execution time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Since(t.startTime))
-		}
+	m.txDuration.Record(ctx, time.Since(t.startTime).Seconds())
+	getLogger().Debug("total execution time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Since(t.startTime))
 
-		processed, err := getMeter().Int64Counter("http.client.request.processed.total")
-		if err != nil {
-			getLogger().Error("error getting processed counter", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			processed.Add(ctx, 1, metric.WithAttributes(semconv.HTTPResponseStatusCode(t.httpPayload.ResponseCode)))
-			getLogger().Debug("request processed", waceapi.LogKeyTxID, t.Transaction.ID())
-		}
+	m.txProcessed.Add(ctx, 1, metric.WithAttributes(semconv.HTTPResponseStatusCode(t.httpPayload.ResponseCode)))
+	getLogger().Debug("request processed", waceapi.LogKeyTxID, t.Transaction.ID())
 
-		*t.IntegrationTime += time.Since(start).Nanoseconds()
-		durationInt, err := getMeter().Float64Histogram("http.client.integration.processed.duration.nanoseconds")
-		if err != nil {
-			getLogger().Error("error getting integration histogram", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-		} else {
-			durationInt.Record(ctx, (float64(*t.IntegrationTime)))
-			getLogger().Debug("integration time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.IntegrationTime))
-		}
-	}()
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+	m.integrationDuration.Record(ctx, time.Duration(*t.IntegrationTime).Seconds())
+	getLogger().Debug("integration time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.IntegrationTime))
 }
 
 // exceptionActiveModels returns the models of type mt reported as active by
