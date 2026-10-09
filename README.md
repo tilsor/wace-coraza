@@ -38,13 +38,16 @@ Logging is not configured in this file. Call `waceWAF.SetLogger` with a `*slog.L
 
 **Rule IDs for Exceptions**
 
-- exception_ids: define the IDs used to configure default rules for model exceptions.
-  - RequestHeaders: ID for exceptions related to request headers.
-  - RequestBody: ID for exceptions related to request bodies.
-  - AllRequest: ID for exceptions applied to all requests.
-  - ResponseHeaders: ID for exceptions related to response headers.
-  - ResponseBody: ID for exceptions related to response bodies.
-  - AllResponse: ID for exceptions applied to all responses.
+- exception_ids (optional): the IDs of the rules that WACE adds after the exceptions file to report which models are still active. Their values only need to be unique and must not collide with the rules of the exceptions file. Every key is optional: a missing one takes its default value. Unknown keys, non-positive IDs and repeated IDs are rejected when the configuration is loaded.
+  - RequestHeaders: ID for exceptions related to request headers (default 9000100).
+  - RequestBody: ID for exceptions related to request bodies (default 9000200).
+  - AllRequest: ID for exceptions applied to all requests (default 9000300).
+  - ResponseHeaders: ID for exceptions related to response headers (default 9000400).
+  - ResponseBody: ID for exceptions related to response bodies (default 9000500).
+  - AllResponse: ID for exceptions applied to all responses (default 9000600).
+  - Everything: ID for exceptions applied to the whole transaction (default 9000700).
+
+  WACE also adds a rule with ID 9000000 before the exceptions file, which marks every model as active; it cannot be configured.
 
 ### File: <app>waceappconfig.yaml
 - modelids (List): a list of model plugin IDs to be applied in this application. Each ID SHOULD match a modelplugin defined in the main configuration.

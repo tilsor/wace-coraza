@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -76,6 +75,45 @@ type WaceAppConfigFileData struct {
 	AppName       string   `yaml:"app_name"`
 }
 
+// exceptionsInitRuleID is the id of the SecAction that marks every model as
+// active, before the exceptions file runs
+const exceptionsInitRuleID = 9000000
+
+// defaultExceptionRuleIDs returns the ids of the SecActions that report the
+// active models of each model plugin type in the exceptions WAF.
+func defaultExceptionRuleIDs() map[string]int {
+	ids := map[string]int{}
+	for t := configstore.RequestHeaders; t.IsValid(); t++ {
+		ids[t.String()] = exceptionsInitRuleID + 100*(int(t)+1)
+	}
+	return ids
+}
+
+// exceptionRuleIDs merges the configured exception rule ids over the defaults
+// and checks that every id belongs to a model plugin type and is unique
+func exceptionRuleIDs(configured map[string]int) (map[string]int, error) {
+	ids := defaultExceptionRuleIDs()
+	for key, id := range configured {
+		if _, err := configstore.StringToPluginType(key); err != nil {
+			return nil, fmt.Errorf("invalid exception_ids key %q: %v", key, err)
+		}
+		if id <= 0 {
+			return nil, fmt.Errorf("invalid exception_ids value for %s: rule id must be positive, got %d", key, id)
+		}
+		ids[key] = id
+	}
+
+	owners := map[int]string{exceptionsInitRuleID: "the exceptions initial rule"}
+	for t := configstore.RequestHeaders; t.IsValid(); t++ {
+		id := ids[t.String()]
+		if owner, found := owners[id]; found {
+			return nil, fmt.Errorf("exception_ids: rule id %d of %s is already used by %s", id, t, owner)
+		}
+		owners[id] = t.String()
+	}
+	return ids, nil
+}
+
 func dataHash(data []byte) string {
 	h := sha256.New()
 	h.Write(data)
@@ -94,9 +132,12 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	g.crsVersion = confData.CRSVersion
 	g.blocking = confData.Blocking
 	g.otelURL = confData.OtelURL
-	g.ruleIdsForExceptions = maps.Clone(confData.ExceptionIDs)
+	g.ruleIdsForExceptions, err = exceptionRuleIDs(confData.ExceptionIDs)
+	if err != nil {
+		return waceGeneralConfigFileData{}, err
+	}
 
-	return confData, err
+	return confData, nil
 }
 
 // parseWaceConfig parses the WACE App configuration from YAML data
@@ -491,7 +532,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceConfig 
 		finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[configstore.Everything.String()]) + ", phase:4, nolog, msg:'" + modelsToGet + "', pass\""
 		finalsRules = append(finalsRules, finalRule)
 	}
-	initialRule := "SecAction \"id:1, phase:1, nolog," + modelsToSet + " pass\""
+	initialRule := "SecAction \"id:" + strconv.Itoa(exceptionsInitRuleID) + ", phase:1, nolog," + modelsToSet + " pass\""
 	conf.exceptionsConfig = conf.exceptionsConfig.
 		WithDirectives(initialRule).
 		WithDirectivesFromFile(filePath)

@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"strconv"
@@ -204,6 +205,74 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 	if gConfig.crsVersion == "" {
 		// CRS Version is not set in the config file
 		t.Error("CRS Version was not loaded properly")
+	}
+}
+
+// TestExceptionRuleIDs verifies that the configured exception rule ids are
+// merged over the defaults, and that unknown types, non-positive ids and
+// repeated ids are rejected.
+func TestExceptionRuleIDs(t *testing.T) {
+	defaults := map[string]int{
+		"RequestHeaders":  9000100,
+		"RequestBody":     9000200,
+		"AllRequest":      9000300,
+		"ResponseHeaders": 9000400,
+		"ResponseBody":    9000500,
+		"AllResponse":     9000600,
+		"Everything":      9000700,
+	}
+	withOverrides := maps.Clone(defaults)
+	withOverrides["RequestHeaders"] = 100
+	withOverrides["Everything"] = 700
+
+	tests := []struct {
+		name       string
+		configured map[string]int
+		want       map[string]int
+		wantErr    string
+	}{
+		{name: "no exception_ids uses the defaults", configured: nil, want: defaults},
+		{
+			name:       "configured ids override only their types",
+			configured: map[string]int{"RequestHeaders": 100, "Everything": 700},
+			want:       withOverrides,
+		},
+		{name: "unknown type", configured: map[string]int{"AllResponses": 100}, wantErr: "invalid exception_ids key"},
+		{name: "zero id", configured: map[string]int{"RequestBody": 0}, wantErr: "must be positive"},
+		{name: "negative id", configured: map[string]int{"RequestBody": -5}, wantErr: "must be positive"},
+		{
+			name:       "id repeated between types",
+			configured: map[string]int{"RequestHeaders": 100, "RequestBody": 100},
+			wantErr:    "already used by",
+		},
+		{
+			name:       "id repeated with a default",
+			configured: map[string]int{"RequestHeaders": 9000700},
+			wantErr:    "already used by",
+		},
+		{
+			name:       "id repeated with the initial rule",
+			configured: map[string]int{"AllRequest": exceptionsInitRuleID},
+			wantErr:    "already used by the exceptions initial rule",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := exceptionRuleIDs(tt.configured)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected an error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("expected %v, got %v", tt.want, got)
+			}
+		})
 	}
 }
 
