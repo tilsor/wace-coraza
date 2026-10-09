@@ -28,6 +28,10 @@ model_plugins:
     plugin_type: AllResponse
     path: "testdata/plugins/trivial.so"
     mode: sync
+  - id: "trivialEverything"
+    plugin_type: Everything
+    path: "testdata/plugins/trivial.so"
+    mode: sync
 
 decision_plugins:
   - id: "weighted_sum"
@@ -39,6 +43,7 @@ decision_plugins:
       trivialResponseHeaders: 0.1
       trivialResponseBody: 0.1
       trivialAllResponse: 0.1
+      trivialEverything: 0.1
     waf_weight: 0.5
     params:
       threshold: "0.5"
@@ -53,3 +58,4 @@ exception_ids:
   ResponseHeaders: 400
   ResponseBody: 500
   AllResponse: 600
+  Everything: 700

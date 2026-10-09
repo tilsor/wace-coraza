@@ -16,6 +16,7 @@ import (
 
 	wace "github.com/tilsor/ModSecIntl_wace_lib"
 
+	cs "github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 
 	"google.golang.org/grpc"
@@ -331,23 +332,9 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessRequestHeaders()
-
-			activeModels = []string{}
-			requestHeadersExceptionRuleMessage := ""
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestHeaders"] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["RequestHeaders"] {
-				requestHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeModels = ParseActiveModels(requestHeadersExceptionRuleMessage)
-
-				for _, model := range activeModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
+			activeModels, _ = t.exceptionActiveModels(cs.RequestHeaders)
 		} else {
-			activeModels = t.waf.waceWafConfig.waceModels.reqHeadModelIDs
+			activeModels = t.waf.waceWafConfig.waceModels[cs.RequestHeaders]
 		}
 
 		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
@@ -357,7 +344,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "1")))
 		}
 
-		err = wace.Analyze("RequestHeaders", t.Transaction.ID(), payload, activeModels)
+		err = wace.Analyze(cs.RequestHeaders, t.Transaction.ID(), payload, activeModels)
 		if err != nil {
 			getLogger().Error("error processing request headers by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
@@ -440,48 +427,18 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	start := time.Now()
 	// The models get a copy: ResponseCode is written below while they run.
 	payload := *t.httpPayload
-	t.coordinator.Add(2)
+	t.coordinator.Add(1)
 	go func() {
 		var activeRequestBodyModels []string
 		var activeRequestModels []string
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessRequestBody()
-
-			requestBodyExceptionRuleMessage := ""
-			requestExceptionRuleMessage := ""
-
-			activeRequestBodyModels = []string{}
-			activeRequestModels = []string{}
-
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["AllRequest"] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["AllRequest"] {
-				requestExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeRequestModels = ParseActiveModels(requestExceptionRuleMessage)
-
-				for _, model := range activeRequestModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
-
-			i = len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["RequestBody"] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["RequestBody"] {
-				requestBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeRequestBodyModels = ParseActiveModels(requestBodyExceptionRuleMessage)
-
-				for _, model := range activeRequestBodyModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
+			activeRequestBodyModels, _ = t.exceptionActiveModels(cs.RequestBody)
+			activeRequestModels, _ = t.exceptionActiveModels(cs.AllRequest)
 		} else {
-			activeRequestBodyModels = t.waf.waceWafConfig.waceModels.reqBodyModelIDs
-			activeRequestModels = t.waf.waceWafConfig.waceModels.reqModelIDs
+			activeRequestBodyModels = t.waf.waceWafConfig.waceModels[cs.RequestBody]
+			activeRequestModels = t.waf.waceWafConfig.waceModels[cs.AllRequest]
 		}
 		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
 		if err != nil {
@@ -489,24 +446,21 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		} else {
 			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "2")))
 		}
-		go func() {
-			getLogger().Debug("processing request body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
-			err := wace.Analyze("RequestBody", t.Transaction.ID(), waceapi.HTTPPayload{RequestBody: payload.RequestBody}, activeRequestBodyModels)
-			if err != nil {
-				getLogger().Error("error processing request body by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-			}
-			t.coordinator.Done()
-		}()
-		go func() {
-			getLogger().Debug("processing request by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
+		getLogger().Debug("processing request body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
-			err := wace.Analyze("AllRequest", t.Transaction.ID(), payload, activeRequestModels)
-			if err != nil {
-				getLogger().Error("error processing request by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-			}
-			t.coordinator.Done()
-		}()
+		err = wace.Analyze(cs.RequestBody, t.Transaction.ID(), waceapi.HTTPPayload{RequestBody: payload.RequestBody}, activeRequestBodyModels)
+		if err != nil {
+			getLogger().Error("error processing request body by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+
+		getLogger().Debug("processing request by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
+
+		err = wace.Analyze(cs.AllRequest, t.Transaction.ID(), payload, activeRequestModels)
+		if err != nil {
+			getLogger().Error("error processing request by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+		t.coordinator.Done()
 	}()
 
 	interruption, err := t.Transaction.ProcessRequestBody()
@@ -586,24 +540,9 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessResponseHeaders(code, proto)
-
-			responseHeadersExceptionRuleMessage := ""
-			activeModels = []string{}
-
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseHeaders"] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["ResponseHeaders"] {
-				responseHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeModels = ParseActiveModels(responseHeadersExceptionRuleMessage)
-
-				for _, model := range activeModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
+			activeModels, _ = t.exceptionActiveModels(cs.ResponseHeaders)
 		} else {
-			activeModels = t.waf.waceWafConfig.waceModels.respHeadModelIDs
+			activeModels = t.waf.waceWafConfig.waceModels[cs.ResponseHeaders]
 		}
 
 		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
@@ -613,7 +552,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "3")))
 		}
 
-		err = wace.Analyze("ResponseHeaders", t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders}, activeModels)
+		err = wace.Analyze(cs.ResponseHeaders, t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders}, activeModels)
 		if err != nil {
 			getLogger().Error("error processing response headers by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
@@ -687,48 +626,22 @@ func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, 
 // ProcessResponseBody implements the ProcessResponseBody interface provided by Coraza WAF to process the response body by WACE and Coraza
 func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	start := time.Now()
-	t.coordinator.Add(2)
+	t.coordinator.Add(1)
 	go func() {
 
 		var activeResponseBodyModels []string
 		var activeResponseModels []string
+		var activeEverythingModels []string
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessResponseBody()
-			responseBodyExceptionRuleMessage := ""
-			responseExceptionRuleMessage := ""
-			activeResponseBodyModels = []string{}
-			activeResponseModels = []string{}
-
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["AllResponse"] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["AllResponse"] {
-				responseExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeResponseModels = ParseActiveModels(responseExceptionRuleMessage)
-
-				for _, model := range activeResponseModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
-
-			i = len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions["ResponseBody"] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions["ResponseBody"] {
-				responseBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeResponseBodyModels = ParseActiveModels(responseBodyExceptionRuleMessage)
-
-				for _, model := range activeResponseBodyModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-
-			}
+			activeResponseBodyModels, _ = t.exceptionActiveModels(cs.ResponseBody)
+			activeResponseModels, _ = t.exceptionActiveModels(cs.AllResponse)
+			activeEverythingModels, _ = t.exceptionActiveModels(cs.Everything)
 		} else {
-			activeResponseBodyModels = t.waf.waceWafConfig.waceModels.respBodyModelIDs
-			activeResponseModels = t.waf.waceWafConfig.waceModels.respModelIDs
+			activeResponseBodyModels = t.waf.waceWafConfig.waceModels[cs.ResponseBody]
+			activeResponseModels = t.waf.waceWafConfig.waceModels[cs.AllResponse]
+			activeEverythingModels = t.waf.waceWafConfig.waceModels[cs.Everything]
 		}
 
 		exceptionsDuration, err := getMeter().Float64Histogram("http.exceptions.duration.nanoseconds")
@@ -738,24 +651,28 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			exceptionsDuration.Record(ctx, (float64(time.Since(start).Nanoseconds())), metric.WithAttributes(attribute.String("phase", "4")))
 		}
 
-		go func() {
-			getLogger().Debug("processing response body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
+		getLogger().Debug("processing response body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
-			err := wace.Analyze("ResponseBody", t.Transaction.ID(), waceapi.HTTPPayload{ResponseBody: t.httpPayload.ResponseBody}, activeResponseBodyModels)
-			if err != nil {
-				getLogger().Error("error processing response body by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-			}
-			t.coordinator.Done()
-		}()
-		go func() {
-			getLogger().Debug("processing response by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
+		err = wace.Analyze(cs.ResponseBody, t.Transaction.ID(), waceapi.HTTPPayload{ResponseBody: t.httpPayload.ResponseBody}, activeResponseBodyModels)
+		if err != nil {
+			getLogger().Error("error processing response body by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+		getLogger().Debug("processing response by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
-			err := wace.Analyze("AllResponse", t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders, ResponseBody: t.httpPayload.ResponseBody}, activeResponseModels)
-			if err != nil {
-				getLogger().Error("error processing response by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-			}
-			t.coordinator.Done()
-		}()
+		err = wace.Analyze(cs.AllResponse, t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders, ResponseBody: t.httpPayload.ResponseBody}, activeResponseModels)
+		if err != nil {
+			getLogger().Error("error processing response by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+
+		getLogger().Debug("processing request and response by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
+
+		payload := *t.httpPayload
+		err = wace.Analyze(cs.Everything, t.Transaction.ID(), payload, activeEverythingModels)
+		if err != nil {
+			getLogger().Error("error processing request and response by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+		}
+
+		t.coordinator.Done()
 	}()
 
 	interruption, err := t.Transaction.ProcessResponseBody()
@@ -925,4 +842,27 @@ func InitMetrics(ctx context.Context, url string) (func(context.Context) error, 
 	setMeter(globalMeterProvider.Meter("waceWAF"))
 
 	return meterProvider.Shutdown, nil
+}
+
+// exceptionActiveModels returns the models of type mt reported as active by
+// the exceptions transaction, and whether the rule reporting them was matched.
+// The exceptions WAF only adds that rule for types with models, so the matched
+// rules are not searched when mt has none.
+func (t WaceTransaction) exceptionActiveModels(mt cs.ModelPluginType) ([]string, bool) {
+	if len(t.waf.waceWafConfig.waceModels[mt]) == 0 {
+		return nil, false
+	}
+	ruleID := gConfig.ruleIdsForExceptions[mt.String()]
+	rules := t.exceptionTransaction.MatchedRules()
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].Rule().ID() != ruleID {
+			continue
+		}
+		activeModels := parseActiveModels(rules[i].Message())
+		for _, model := range activeModels {
+			getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
+		}
+		return activeModels, true
+	}
+	return nil, false
 }

@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/corazawaf/coraza/v3/types"
+	cs "github.com/tilsor/ModSecIntl_wace_lib/configstore"
 )
 
 // testRuleMetadata is a minimal types.RuleMetadata used to build matched rules
@@ -159,13 +161,9 @@ func TestNewConfig(t *testing.T) {
 		t.Errorf("Error creating WaceConfig")
 	}
 
-	expected := &WaceModels{
-		reqHeadModelIDs:  []string{"trivial"},
-		reqBodyModelIDs:  []string{"trivial2"},
-		reqModelIDs:      []string{},
-		respHeadModelIDs: []string{},
-		respBodyModelIDs: []string{},
-		respModelIDs:     []string{},
+	expected := WaceModels{
+		cs.RequestHeaders: {"trivial"},
+		cs.RequestBody:    {"trivial2"},
 	}
 
 	if !reflect.DeepEqual(gConfig.waceModels, expected) {
@@ -175,7 +173,7 @@ func TestNewConfig(t *testing.T) {
 
 func TestParseUnexceptedModels(t *testing.T) {
 	exceptionRuleMessage := "model1:true,model2:false,model3:true,"
-	models := ParseActiveModels(exceptionRuleMessage)
+	models := parseActiveModels(exceptionRuleMessage)
 	if len(models) != 2 {
 		t.Errorf("Error parsing unexcepted models: Expected 2, Got %d", len(models))
 	}
@@ -203,6 +201,74 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 	if gConfig.crsVersion == "" {
 		// CRS Version is not set in the config file
 		t.Error("CRS Version was not loaded properly")
+	}
+}
+
+// TestExceptionRuleIDs verifies that the configured exception rule ids are
+// merged over the defaults, and that unknown types, non-positive ids and
+// repeated ids are rejected.
+func TestExceptionRuleIDs(t *testing.T) {
+	defaults := map[string]int{
+		"RequestHeaders":  9000100,
+		"RequestBody":     9000200,
+		"AllRequest":      9000300,
+		"ResponseHeaders": 9000400,
+		"ResponseBody":    9000500,
+		"AllResponse":     9000600,
+		"Everything":      9000700,
+	}
+	withOverrides := maps.Clone(defaults)
+	withOverrides["RequestHeaders"] = 100
+	withOverrides["Everything"] = 700
+
+	tests := []struct {
+		name       string
+		configured map[string]int
+		want       map[string]int
+		wantErr    string
+	}{
+		{name: "no exception_ids uses the defaults", configured: nil, want: defaults},
+		{
+			name:       "configured ids override only their types",
+			configured: map[string]int{"RequestHeaders": 100, "Everything": 700},
+			want:       withOverrides,
+		},
+		{name: "unknown type", configured: map[string]int{"AllResponses": 100}, wantErr: "invalid exception_ids key"},
+		{name: "zero id", configured: map[string]int{"RequestBody": 0}, wantErr: "must be positive"},
+		{name: "negative id", configured: map[string]int{"RequestBody": -5}, wantErr: "must be positive"},
+		{
+			name:       "id repeated between types",
+			configured: map[string]int{"RequestHeaders": 100, "RequestBody": 100},
+			wantErr:    "already used by",
+		},
+		{
+			name:       "id repeated with a default",
+			configured: map[string]int{"RequestHeaders": 9000700},
+			wantErr:    "already used by",
+		},
+		{
+			name:       "id repeated with the initial rule",
+			configured: map[string]int{"AllRequest": exceptionsInitRuleID},
+			wantErr:    "already used by the exceptions initial rule",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := exceptionRuleIDs(tt.configured)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected an error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("expected %v, got %v", tt.want, got)
+			}
+		})
 	}
 }
 
@@ -238,8 +304,8 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 		t.Error("Decision Plugin Ids were not loaded properly")
 	}
 
-	if len(wConfig.waceModels.reqHeadModelIDs) == 0 {
-		t.Errorf("Model Plugin Ids were not loaded properly, expected %d model Id, got %d", 1, len(wConfig.waceModels.reqHeadModelIDs))
+	if len(wConfig.waceModels[cs.RequestHeaders]) == 0 {
+		t.Errorf("Model Plugin Ids were not loaded properly, expected %d model Id, got %d", 1, len(wConfig.waceModels[cs.RequestHeaders]))
 	}
 }
 
@@ -384,7 +450,7 @@ func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
 	gConfig = &generalConfig{
 		earlyBlocking: true,
 		blocking:      true,
-		waceModels:    &WaceModels{},
+		waceModels:    WaceModels{},
 		waceDecision:  "weighted_sum",
 	}
 	defer func() { gConfig = nil }()
@@ -472,8 +538,8 @@ func TestNewWAFWithWaceAppConfig(t *testing.T) {
 	if !reflect.DeepEqual(c.waceDecisionIds, []string{"weighted_sum"}) {
 		t.Errorf("expected waceDecisionIds %q, got %q", []string{"weighted_sum"}, c.waceDecisionIds)
 	}
-	if !reflect.DeepEqual(c.waceModels.reqHeadModelIDs, []string{"trivial"}) {
-		t.Errorf("expected reqHeadModelIDs %q, got %q", []string{"trivial"}, c.waceModels.reqHeadModelIDs)
+	if !reflect.DeepEqual(c.waceModels[cs.RequestHeaders], []string{"trivial"}) {
+		t.Errorf("expected %s models %q, got %q", cs.RequestHeaders, []string{"trivial"}, c.waceModels[cs.RequestHeaders])
 	}
 }
 
@@ -561,13 +627,14 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		t.Errorf("Error loading config: %s", err.Error())
 	}
 
-	expected := &WaceModels{
-		reqHeadModelIDs:  []string{"trivialRequestHeaders"},
-		reqBodyModelIDs:  []string{"trivialRequestBody"},
-		reqModelIDs:      []string{"trivialAllRequest"},
-		respHeadModelIDs: []string{"trivialResponseHeaders"},
-		respBodyModelIDs: []string{"trivialResponseBody"},
-		respModelIDs:     []string{"trivialAllResponse"},
+	expected := WaceModels{
+		cs.RequestHeaders:  {"trivialRequestHeaders"},
+		cs.RequestBody:     {"trivialRequestBody"},
+		cs.AllRequest:      {"trivialAllRequest"},
+		cs.ResponseHeaders: {"trivialResponseHeaders"},
+		cs.ResponseBody:    {"trivialResponseBody"},
+		cs.AllResponse:     {"trivialAllResponse"},
+		cs.Everything:      {"trivialEverything"},
 	}
 
 	if !reflect.DeepEqual(gConfig.waceModels, expected) {
@@ -581,6 +648,7 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		"trivialResponseHeaders",
 		"trivialResponseBody",
 		"trivialAllResponse",
+		"trivialEverything",
 	}
 	results, decisionIds, err := newWacePluginsConfig(models, []string{"weighted_sum"})
 
@@ -659,11 +727,11 @@ func TestNewWAFWithTrainingModel(t *testing.T) {
 	if gConfig.waceModels == nil {
 		t.Fatal("waceModels is nil after loading training config")
 	}
-	if len(gConfig.waceModels.reqHeadModelIDs) != 0 {
-		t.Errorf("expected the training model to be excluded from the general config's default models, got %v", gConfig.waceModels.reqHeadModelIDs)
+	if len(gConfig.waceModels[cs.RequestHeaders]) != 0 {
+		t.Errorf("expected the training model to be excluded from the general config's default models, got %v", gConfig.waceModels[cs.RequestHeaders])
 	}
-	if len(waf.waceWafConfig.waceModels.reqHeadModelIDs) == 0 {
-		t.Error("expected training model to be present in reqHeadModelIDs when opted in via the app config")
+	if len(waf.waceWafConfig.waceModels[cs.RequestHeaders]) == 0 {
+		t.Error("expected training model to be present in the RequestHeaders models when opted in via the app config")
 	}
 }
 

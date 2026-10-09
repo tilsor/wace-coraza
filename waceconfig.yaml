@@ -46,3 +46,4 @@ exception_ids:
   ResponseHeaders: 400
   ResponseBody: 500
   AllResponse: 600
+  Everything: 700
