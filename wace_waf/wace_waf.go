@@ -19,16 +19,8 @@ import (
 	cs "github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
@@ -58,25 +50,6 @@ type WaceTransaction struct {
 
 var gConfig *generalConfig
 var ctx = context.Background()
-
-// meterHolder wraps the WACE WAF meter so it can be stored in an
-// atomic.Pointer: InitMetrics replaces it while transactions may be
-// recording on it.
-type meterHolder struct {
-	metric.Meter
-}
-
-var currentMeter atomic.Pointer[meterHolder]
-
-// getMeter returns the current WACE WAF meter.
-func getMeter() metric.Meter {
-	return currentMeter.Load().Meter
-}
-
-// setMeter replaces the WACE WAF meter.
-func setMeter(m metric.Meter) {
-	currentMeter.Store(&meterHolder{m})
-}
 
 var configFilePath string
 
@@ -129,7 +102,6 @@ func resolveConfigFilePath() string {
 func init() {
 	configFilePath = resolveConfigFilePath()
 	SetLogger(nil)
-	setMeter(noop.NewMeterProvider().Meter("waceWAF"))
 }
 
 // NewWAF creates a new WaceWAF object with the given configuration
@@ -146,12 +118,17 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 			return nil, fmt.Errorf("Error loading general config: %v", err)
 		}
 
-		InitMetrics(ctx, gConfig.otelURL)
-		// Initialize WACE call, wich validate and test configs
-		err = wace.Init(globalMeterProvider, confData.ConfigFileData, getCoreLogger())
+		metrics, err := newMetrics(ctx, gConfig.otelURL)
 		if err != nil {
+			return nil, fmt.Errorf("Error initializing metrics: %v", err)
+		}
+		// Initialize WACE call, wich validate and test configs
+		err = wace.Init(metrics.provider, confData.ConfigFileData, getCoreLogger())
+		if err != nil {
+			shutdownMetrics(metrics)
 			return nil, fmt.Errorf("Error WACE initialize failed: %v", err)
 		}
+		shutdownMetrics(currentMetrics.Swap(metrics))
 
 		// After plugins are validated, we get the default plugin values.
 		gConfig.setDefaultPlugins(confData)
@@ -172,13 +149,25 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 				return nil, fmt.Errorf("Error loading general config: %v", err)
 			}
 
+			// The metrics are only replaced once the WACE core accepts
+			// the new configuration.
+			metrics := currentMetrics.Load()
 			if gConfig.otelURL != newGC.otelURL {
-				InitMetrics(ctx, newGC.otelURL)
+				metrics, err = newMetrics(ctx, newGC.otelURL)
+				if err != nil {
+					return nil, fmt.Errorf("Error initializing metrics: %v", err)
+				}
 			}
 
-			err = wace.Reload(globalMeterProvider, confData.ConfigFileData, getCoreLogger())
+			err = wace.Reload(metrics.provider, confData.ConfigFileData, getCoreLogger())
 			if err != nil {
+				if metrics != currentMetrics.Load() {
+					shutdownMetrics(metrics)
+				}
 				return nil, fmt.Errorf("Error WACE reload failed: %v", err)
+			}
+			if old := currentMetrics.Swap(metrics); old != metrics {
+				shutdownMetrics(old)
 			}
 
 			// After plugins are validated, we get the default plugin values.
@@ -756,92 +745,6 @@ func (t WaceTransaction) ProcessLogging() {
 			getLogger().Debug("integration time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.IntegrationTime))
 		}
 	}()
-}
-
-var serviceName = semconv.ServiceNameKey.String("waceWAF-service")
-
-// initConn creates a gRPC connection to the OpenTelemetry Collector. It returns the connection object and an error if the connection fails.
-// This function is based on the example provided by OpenTelemetry Go contrib repository.
-// https://github.com/open-telemetry/opentelemetry-go-contrib/blob/main/examples/otel-collector/main.go
-func initConn(url string) (*grpc.ClientConn, error) {
-	// It connects the OpenTelemetry Collector through local gRPC connection.
-	// You may replace `localhost:4317` with your endpoint.
-	if url == "" {
-		url = "localhost:4317"
-	}
-	conn, err := grpc.NewClient(url,
-		// Note the use of insecure transport here. TLS is recommended in production.
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
-	}
-
-	return conn, err
-}
-
-// initMeterProvider initializes an OTLP exporter, and configures the corresponding meter provider.
-func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn) (func(context.Context) error, error) {
-	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
-	}
-
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(2*time.Second))),
-		sdkmetric.WithResource(res),
-	)
-
-	globalMeterProvider = meterProvider
-	setMeter(globalMeterProvider.Meter("waceWAF"))
-
-	return meterProvider.Shutdown, nil
-}
-
-var globalMeterProvider metric.MeterProvider
-
-// getWaceMeter returns the meter for the WACE instrumentation.
-func getWaceMeter() metric.Meter {
-	return globalMeterProvider.Meter("wace")
-}
-
-// InitMetrics initializes the OpenTelemetry metrics instrumentation.
-func InitMetrics(ctx context.Context, url string) (func(context.Context) error, error) {
-	if url == "" {
-		globalMeterProvider = noop.NewMeterProvider()
-		otel.SetMeterProvider(globalMeterProvider)
-		setMeter(globalMeterProvider.Meter("waceWAF"))
-		return func(_ context.Context) error { return nil }, nil
-	}
-
-	conn, err := initConn(url)
-	if err != nil {
-		panic(err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			serviceName,
-		),
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
-	}
-
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(2*time.Second))),
-		sdkmetric.WithResource(res),
-	)
-
-	globalMeterProvider = meterProvider
-	setMeter(globalMeterProvider.Meter("waceWAF"))
-
-	return meterProvider.Shutdown, nil
 }
 
 // exceptionActiveModels returns the models of type mt reported as active by
