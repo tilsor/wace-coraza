@@ -1,12 +1,12 @@
 package waceWAF
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -371,38 +371,48 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	return interruption
 }
 
-// ReadRequestBodyFrom implements the ReadRequestBodyFrom interface provided by Coraza WAF to read the request body by WACE and Coraza
+// ReadRequestBodyFrom implements the ReadRequestBodyFrom interface provided by Coraza WAF to read the request body.
+// Coraza buffers the body up to its limit; WACE reads it from that buffer in ProcessRequestBody.
 func (t WaceTransaction) ReadRequestBodyFrom(r io.Reader) (*types.Interruption, int, error) {
-	startTime := time.Now()
-	var buf bytes.Buffer
-	tee := io.TeeReader(r, &buf)
-	b, err1 := io.ReadAll(tee)
-	if err1 != nil {
-		return nil, 0, err1
-	}
-	t.httpPayload.RequestBody = string(b)
-
-	interruption, _, err2 := t.exceptionTransaction.ReadRequestBodyFrom(&buf)
-
-	if err2 != nil {
-		return interruption, 0, err2
-	}
-
 	start := time.Now()
-	interruption2, cantB2, err := t.Transaction.ReadRequestBodyFrom(&buf)
-	*t.CRSExecTime += time.Since(start).Nanoseconds()
+	interruption, n, err := t.Transaction.ReadRequestBodyFrom(r)
+	elapsed := time.Since(start)
+	*t.CRSExecTime += elapsed.Nanoseconds()
+	*t.IntegrationTime += elapsed.Nanoseconds()
 
-	getMetrics().requestBodyReadDuration.Record(ctx, time.Since(startTime).Seconds())
+	getMetrics().requestBodyReadDuration.Record(ctx, elapsed.Seconds())
 
-	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
+	getLogger().Debug("request body read", waceapi.LogKeyTxID, t.Transaction.ID(), "body.size", n)
+	return interruption, n, err
+}
 
-	getLogger().Debug("request body read", waceapi.LogKeyTxID, t.Transaction.ID(), "body.size", len(t.httpPayload.RequestBody))
-	return interruption2, cantB2, err
+// WriteRequestBody implements the WriteRequestBody interface provided by Coraza WAF to write the request body.
+// Coraza buffers the body up to its limit; WACE reads it from that buffer in ProcessRequestBody.
+func (t WaceTransaction) WriteRequestBody(b []byte) (*types.Interruption, int, error) {
+	start := time.Now()
+	interruption, n, err := t.Transaction.WriteRequestBody(b)
+	elapsed := time.Since(start)
+	*t.CRSExecTime += elapsed.Nanoseconds()
+	*t.IntegrationTime += elapsed.Nanoseconds()
+
+	getMetrics().requestBodyReadDuration.Record(ctx, elapsed.Seconds())
+
+	getLogger().Debug("request body written", waceapi.LogKeyTxID, t.Transaction.ID(), "body.size", n)
+	return interruption, n, err
 }
 
 // ProcessRequestBody implements the ProcessRequestBody interface provided by Coraza WAF to process the request body by WACE and Coraza
 func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	start := time.Now()
+
+	// Read before starting the goroutine: the Coraza body buffer is not safe
+	// for concurrent readers.
+	body, err := bodyString(t.Transaction.RequestBodyReader())
+	if err != nil {
+		getLogger().Error("error reading request body buffer", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+	}
+	t.httpPayload.RequestBody = body
+
 	// The models get a copy: ResponseCode is written below while they run.
 	payload := *t.httpPayload
 	t.coordinator.Add(1)
@@ -411,6 +421,9 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		var activeRequestModels []string
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
+			if _, _, err := t.exceptionTransaction.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+				getLogger().Error("error writing request body to the exceptions transaction", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+			}
 			t.exceptionTransaction.ProcessRequestBody()
 			activeRequestBodyModels, _ = t.exceptionActiveModels(cs.RequestBody)
 			activeRequestModels, _ = t.exceptionActiveModels(cs.AllRequest)
@@ -564,32 +577,33 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	return interruption
 }
 
-// WriteResponseBody implements the WriteResponseBody interface provided by Coraza WAF to write the response body by WACE and Coraza
+// WriteResponseBody implements the WriteResponseBody interface provided by Coraza WAF to write the response body.
+// Coraza buffers the body up to its limit; WACE reads it from that buffer in ProcessResponseBody.
 func (t WaceTransaction) WriteResponseBody(b []byte) (*types.Interruption, int, error) {
-	startTime := time.Now()
-	t.httpPayload.ResponseBody = string(b)
-
-	interruption, cantB, err := t.exceptionTransaction.WriteResponseBody(b)
-
 	start := time.Now()
-	if err != nil {
-		return interruption, 0, err
-	}
+	interruption, n, err := t.Transaction.WriteResponseBody(b)
+	elapsed := time.Since(start)
+	*t.CRSExecTime += elapsed.Nanoseconds()
+	*t.IntegrationTime += elapsed.Nanoseconds()
 
-	interruption, cantB, err = t.Transaction.WriteResponseBody(b)
-	*t.CRSExecTime += time.Since(start).Nanoseconds()
+	getMetrics().responseBodyWriteDuration.Record(ctx, elapsed.Seconds())
 
-	getMetrics().responseBodyWriteDuration.Record(ctx, time.Since(startTime).Seconds())
-
-	*t.IntegrationTime += time.Since(startTime).Nanoseconds()
-
-	getLogger().Debug("response body written", waceapi.LogKeyTxID, t.Transaction.ID())
-	return interruption, cantB, err
+	getLogger().Debug("response body written", waceapi.LogKeyTxID, t.Transaction.ID(), "body.size", n)
+	return interruption, n, err
 }
 
 // ProcessResponseBody implements the ProcessResponseBody interface provided by Coraza WAF to process the response body by WACE and Coraza
 func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	start := time.Now()
+
+	// Read before starting the goroutine: the Coraza body buffer is not safe
+	// for concurrent readers.
+	body, err := bodyString(t.Transaction.ResponseBodyReader())
+	if err != nil {
+		getLogger().Error("error reading response body buffer", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+	}
+	t.httpPayload.ResponseBody = body
+
 	t.coordinator.Add(1)
 	go func() {
 
@@ -598,6 +612,9 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		var activeEverythingModels []string
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
+			if _, _, err := t.exceptionTransaction.ReadResponseBodyFrom(strings.NewReader(body)); err != nil {
+				getLogger().Error("error writing response body to the exceptions transaction", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
+			}
 			t.exceptionTransaction.ProcessResponseBody()
 			activeResponseBodyModels, _ = t.exceptionActiveModels(cs.ResponseBody)
 			activeResponseModels, _ = t.exceptionActiveModels(cs.AllResponse)
@@ -695,6 +712,19 @@ func (t WaceTransaction) ProcessLogging() {
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
 	m.integrationDuration.Record(ctx, time.Duration(*t.IntegrationTime).Seconds())
 	getLogger().Debug("integration time", waceapi.LogKeyTxID, t.Transaction.ID(), "duration", time.Duration(*t.IntegrationTime))
+}
+
+// bodyString returns the content of a Coraza body buffer as a string. It
+// takes the result of RequestBodyReader or ResponseBodyReader as is.
+func bodyString(r io.Reader, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, r); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
 }
 
 // exceptionActiveModels returns the models of type mt reported as active by
