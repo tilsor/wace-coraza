@@ -1,7 +1,10 @@
 package waceWAF
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
+	"github.com/corazawaf/coraza/v3/types"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
@@ -68,7 +72,8 @@ func TestNewWaf(t *testing.T) {
 }
 
 func TestTransactionAddData(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
+	// Every model type is configured, so the payload has every field.
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
 	defer resetWACE()
@@ -82,11 +87,17 @@ func TestTransactionAddData(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
+	defer tx.ProcessLogging()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Errorf("request headers should not be blocked, got interruption: %v", i)
+	}
 	body := "test"
 	reader := strings.NewReader(body)
 	_, count, err := tx.ReadRequestBodyFrom(reader)
@@ -96,7 +107,13 @@ func TestTransactionAddData(t *testing.T) {
 	if count != len(body) {
 		t.Errorf("Error reading request body: Expected bytes: %d, Got: %d", len(body), count)
 	}
-	tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		t.Errorf("Error processing request body: %v", err.Error())
+	}
+	tx.AddResponseHeader("content-type", "text/plain")
+	if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+		t.Errorf("response headers should not be blocked, got interruption: %v", i)
+	}
 	_, count, err = tx.WriteResponseBody([]byte(body))
 	if err != nil {
 		t.Errorf("Error writing response body: %v", err.Error())
@@ -104,18 +121,26 @@ func TestTransactionAddData(t *testing.T) {
 	if count != len(body) {
 		t.Errorf("Error writing response body: Expected bytes: %d, Got: %d", len(body), count)
 	}
+	if _, err := tx.ProcessResponseBody(); err != nil {
+		t.Errorf("Error processing response body: %v", err.Error())
+	}
 	txW, ok := tx.(WaceTransaction)
 	if !ok {
 		t.Errorf("Error casting to WaceTransaction")
 	}
 	expectedPayload := waceapi.HTTPPayload{
-		URI:             "http://localhost:8090",
-		Method:          "GET",
-		HTTPVersion:     "HTTP/1.1",
-		RequestHeaders:  []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
-		RequestBody:     "test",
-		ResponseHeaders: []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
-		ResponseBody:    "test",
+		URI:         "http://localhost:8090",
+		Method:      "GET",
+		HTTPVersion: "HTTP/1.1",
+		RequestHeaders: []waceapi.HTTPHeader{
+			{Key: "Host", Value: "localhost"},
+			{Key: "content-type", Value: "application/x-www-form-urlencoded"},
+		},
+		RequestBody:      "test",
+		ResponseCode:     200,
+		ResponseProtocol: "HTTP/1.1",
+		ResponseHeaders:  []waceapi.HTTPHeader{{Key: "content-type", Value: "text/plain"}},
+		ResponseBody:     "test",
 	}
 	if !reflect.DeepEqual(*txW.httpPayload, expectedPayload) {
 		t.Errorf("Error processing http payload: Expected: %v, Got: %v", expectedPayload, *txW.httpPayload)
@@ -123,7 +148,8 @@ func TestTransactionAddData(t *testing.T) {
 }
 
 func TestTransactionWithIDAddData(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
+	// Every model type is configured, so the payload has every field.
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
 	gConfig = nil
 
 	defer resetWACE()
@@ -137,11 +163,17 @@ func TestTransactionWithIDAddData(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 	tx := waf.NewTransactionWithID("1234567890123456")
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
+	defer tx.ProcessLogging()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Errorf("request headers should not be blocked, got interruption: %v", i)
+	}
 	body := "test"
 	reader := strings.NewReader(body)
 	_, count, err := tx.ReadRequestBodyFrom(reader)
@@ -151,7 +183,13 @@ func TestTransactionWithIDAddData(t *testing.T) {
 	if count != len(body) {
 		t.Errorf("Error reading request body: Expected bytes: %d, Got: %d", len(body), count)
 	}
-	tx.AddResponseHeader("content-type", "application/x-www-form-urlencoded")
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		t.Errorf("Error processing request body: %v", err.Error())
+	}
+	tx.AddResponseHeader("content-type", "text/plain")
+	if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+		t.Errorf("response headers should not be blocked, got interruption: %v", i)
+	}
 	_, count, err = tx.WriteResponseBody([]byte(body))
 	if err != nil {
 		t.Errorf("Error writing response body: %v", err.Error())
@@ -159,18 +197,26 @@ func TestTransactionWithIDAddData(t *testing.T) {
 	if count != len(body) {
 		t.Errorf("Error writing response body: Expected bytes: %d, Got: %d", len(body), count)
 	}
+	if _, err := tx.ProcessResponseBody(); err != nil {
+		t.Errorf("Error processing response body: %v", err.Error())
+	}
 	txW, ok := tx.(WaceTransaction)
 	if !ok {
 		t.Errorf("Error casting to WaceTransaction")
 	}
 	expectedPayload := waceapi.HTTPPayload{
-		URI:             "http://localhost:8090",
-		Method:          "GET",
-		HTTPVersion:     "HTTP/1.1",
-		RequestHeaders:  []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
-		RequestBody:     "test",
-		ResponseHeaders: []waceapi.HTTPHeader{{Key: "content-type", Value: "application/x-www-form-urlencoded"}},
-		ResponseBody:    "test",
+		URI:         "http://localhost:8090",
+		Method:      "GET",
+		HTTPVersion: "HTTP/1.1",
+		RequestHeaders: []waceapi.HTTPHeader{
+			{Key: "Host", Value: "localhost"},
+			{Key: "content-type", Value: "application/x-www-form-urlencoded"},
+		},
+		RequestBody:      "test",
+		ResponseCode:     200,
+		ResponseProtocol: "HTTP/1.1",
+		ResponseHeaders:  []waceapi.HTTPHeader{{Key: "content-type", Value: "text/plain"}},
+		ResponseBody:     "test",
 	}
 	if !reflect.DeepEqual(*txW.httpPayload, expectedPayload) {
 		t.Errorf("Error processing http payload: Expected: %v, Got: %v", expectedPayload, *txW.httpPayload)
@@ -190,6 +236,7 @@ func TestTransactionProcess(t *testing.T) {
 		t.Errorf("Error creating WAF: %v", err.Error())
 	}
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -261,6 +308,7 @@ func TestBlockTransactions(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -338,6 +386,7 @@ func TestBlockTransactionsBlockingDisabled(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	if tx == nil {
 		t.Errorf("Error creating transaction")
 	}
@@ -395,6 +444,7 @@ func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.SetServerName("Apache")
@@ -435,6 +485,7 @@ func TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking(t *testing.T
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.SetServerName("Apache")
@@ -478,6 +529,7 @@ func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tx := waf.NewTransaction()
+			defer tx.Close()
 			tx.ProcessURI(tt.uri, "GET", "HTTP/1.1")
 			tx.AddRequestHeader("Host", "test")
 			i := tx.ProcessRequestHeaders()
@@ -512,6 +564,7 @@ func TestBlockTransactionsEverythingModel(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
@@ -619,6 +672,7 @@ func testExceptions(t *testing.T, exceptionsFile string) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tx := waf.NewTransaction()
+			defer tx.Close()
 			if tx == nil {
 				t.Fatal("Error creating transaction")
 			}
@@ -715,6 +769,7 @@ func TestWithExceptionsFromFile(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 
 	tx.ProcessURI("http://localhost:8090/trivialRequestHeaders", "GET", "HTTP/1.1")
@@ -783,6 +838,7 @@ func TestTrainingModelNotUsedInDecision(t *testing.T) {
 	}
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.AddRequestHeader("Host", "Test")
@@ -840,6 +896,7 @@ func newBenchCorazaWAF(b *testing.B) coraza.WAF {
 // the same way the Coraza HTTP middleware does.
 func runBenchTransaction(b *testing.B, waf coraza.WAF) {
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	defer tx.ProcessLogging()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
@@ -965,4 +1022,315 @@ func BenchmarkCorazaTransactionsParallel(b *testing.B) {
 			runBenchTransaction(b, waf)
 		}
 	})
+}
+
+// newExceptionsBodyWAF returns a WAF with an exceptions file whose body access
+// is enabled through WithRequestBodyAccess and WithResponseBodyAccess, so both
+// the main and the exceptions transactions have access to the bodies.
+func newExceptionsBodyWAF(t *testing.T) *WaceWAF {
+	t.Helper()
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
+	gConfig = nil
+
+	wafConf := NewWaceWAFConfig().
+		WithExceptionsFromFile("testdata/config/waceexceptions.conf").
+		WithRequestBodyAccess().
+		WithResponseBodyAccess().
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+	return waf
+}
+
+// TestRequestBodyWithExceptions verifies that the CRS inspects the request
+// body when the exceptions transaction also has access to it, and that the
+// exceptions transaction and the models get the same body.
+func TestRequestBodyWithExceptions(t *testing.T) {
+	defer resetWACE()
+	waf := newExceptionsBodyWAF(t)
+
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090", "POST", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+	}
+
+	body := "user=password"
+	if _, _, err := tx.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+		t.Fatalf("Error reading request body: %v", err.Error())
+	}
+	i, err := tx.ProcessRequestBody()
+	if err != nil {
+		t.Fatalf("Error processing request body: %v", err.Error())
+	}
+	if i == nil || i.Status != 403 {
+		t.Errorf("request body should be blocked by rule 100, got interruption: %v", i)
+	}
+
+	txW := tx.(WaceTransaction)
+	if txW.httpPayload.RequestBody != body {
+		t.Errorf("expected models request body %q, got %q", body, txW.httpPayload.RequestBody)
+	}
+	got, err := bodyString(txW.exceptionTransaction.RequestBodyReader())
+	if err != nil {
+		t.Fatalf("Error reading the exceptions request body: %v", err)
+	}
+	if got != body {
+		t.Errorf("expected exceptions request body %q, got %q", body, got)
+	}
+}
+
+// TestResponseBodyChunks verifies that the models and the exceptions
+// transaction get the whole response body when it is written in chunks.
+func TestResponseBodyChunks(t *testing.T) {
+	defer resetWACE()
+	waf := newExceptionsBodyWAF(t)
+
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+	}
+	if i, err := tx.ProcessRequestBody(); i != nil || err != nil {
+		t.Fatalf("request body should not be blocked, got interruption: %v, error: %v", i, err)
+	}
+
+	tx.AddResponseHeader("content-type", "text/plain")
+	if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+		t.Fatalf("response headers should not be blocked, got interruption: %v", i)
+	}
+	chunks := []string{"first ", "second ", "third"}
+	for _, chunk := range chunks {
+		if _, _, err := tx.WriteResponseBody([]byte(chunk)); err != nil {
+			t.Fatalf("Error writing response body: %v", err.Error())
+		}
+	}
+	if _, err := tx.ProcessResponseBody(); err != nil {
+		t.Fatalf("Error processing response body: %v", err.Error())
+	}
+
+	body := strings.Join(chunks, "")
+	txW := tx.(WaceTransaction)
+	if txW.httpPayload.ResponseBody != body {
+		t.Errorf("expected models response body %q, got %q", body, txW.httpPayload.ResponseBody)
+	}
+	got, err := bodyString(txW.exceptionTransaction.ResponseBodyReader())
+	if err != nil {
+		t.Fatalf("Error reading the exceptions response body: %v", err)
+	}
+	if got != body {
+		t.Errorf("expected exceptions response body %q, got %q", body, got)
+	}
+}
+
+// TestRequestBodyProcessPartial verifies that, with ProcessPartial, the
+// request body is not read beyond the limit: the models get the body up to
+// the limit and the rest is left in the reader for the backend.
+func TestRequestBodyProcessPartial(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer resetWACE()
+
+	const limit = 10
+	wafConf := NewWAFConfig().
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf").
+		WithDirectives("SecRequestBodyLimitAction ProcessPartial").
+		WithRequestBodyLimit(limit).
+		WithRequestBodyInMemoryLimit(limit)
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090", "POST", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	tx.AddRequestHeader("content-type", "text/plain")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+	}
+
+	body := "0123456789abcdefghij"
+	// bufio.Reader hides the length of the body, as a network body would.
+	r := bufio.NewReader(strings.NewReader(body))
+	if _, _, err := tx.ReadRequestBodyFrom(r); err != nil {
+		t.Fatalf("Error reading request body: %v", err.Error())
+	}
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		t.Fatalf("Error processing request body: %v", err.Error())
+	}
+
+	if got := tx.(WaceTransaction).httpPayload.RequestBody; got != body[:limit] {
+		t.Errorf("expected models request body %q, got %q", body[:limit], got)
+	}
+	rest, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("Error reading the rest of the body: %v", err)
+	}
+	if string(rest) != body[limit:] {
+		t.Errorf("expected the rest of the body %q left in the reader, got %q", body[limit:], rest)
+	}
+}
+
+// closeRecorderTx is a Coraza transaction that records when it is closed.
+// Only ID and Close are implemented.
+type closeRecorderTx struct {
+	types.Transaction
+	name   string
+	err    error
+	closed *[]string
+}
+
+func (tx closeRecorderTx) ID() string { return "close-test" }
+
+func (tx closeRecorderTx) Close() error {
+	*tx.closed = append(*tx.closed, tx.name)
+	return tx.err
+}
+
+// TestCloseClosesBothTransactions verifies that Close closes the exceptions
+// and the main transactions, even if closing the first one fails, and returns
+// the errors of both.
+func TestCloseClosesBothTransactions(t *testing.T) {
+	var closed []string
+	errExceptions := errors.New("exceptions error")
+	errMain := errors.New("main error")
+	tx := WaceTransaction{
+		Transaction:          closeRecorderTx{name: "main", err: errMain, closed: &closed},
+		exceptionTransaction: closeRecorderTx{name: "exceptions", err: errExceptions, closed: &closed},
+	}
+
+	err := tx.Close()
+
+	if expected := []string{"exceptions", "main"}; !reflect.DeepEqual(closed, expected) {
+		t.Errorf("expected closed transactions %q, got %q", expected, closed)
+	}
+	if !errors.Is(err, errExceptions) || !errors.Is(err, errMain) {
+		t.Errorf("expected both close errors, got %v", err)
+	}
+}
+
+// TestCloseWithoutExceptions verifies that Close only closes the main
+// transaction when there is no exceptions transaction.
+func TestCloseWithoutExceptions(t *testing.T) {
+	var closed []string
+	tx := WaceTransaction{
+		Transaction: closeRecorderTx{name: "main", closed: &closed},
+	}
+
+	if err := tx.Close(); err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if expected := []string{"main"}; !reflect.DeepEqual(closed, expected) {
+		t.Errorf("expected closed transactions %q, got %q", expected, closed)
+	}
+}
+
+// TestNoExceptionsTransaction verifies that no exceptions WAF nor
+// exceptions transactions are created without an exceptions file.
+func TestNoExceptionsTransaction(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer resetWACE()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+	if waf.exceptionWAF != nil {
+		t.Errorf("expected no exceptions WAF without an exceptions file")
+	}
+
+	for name, tx := range map[string]types.Transaction{
+		"NewTransaction":       waf.NewTransaction(),
+		"NewTransactionWithID": waf.NewTransactionWithID("no-exceptions-tx"),
+	} {
+		if tx.(WaceTransaction).exceptionTransaction != nil {
+			t.Errorf("%s: expected no exceptions transaction without an exceptions file", name)
+		}
+		if err := tx.Close(); err != nil {
+			t.Errorf("%s: Error closing transaction: %v", name, err)
+		}
+	}
+}
+
+// TestBodiesOnlyReadForModels verifies that a body is only read from the
+// Coraza buffer when a model gets it. waceconfig.yaml only has RequestHeaders
+// and RequestBody models, so the response body is not read.
+func TestBodiesOnlyReadForModels(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+
+	defer resetWACE()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err.Error())
+	}
+
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	defer tx.ProcessLogging()
+
+	tx.ProcessURI("http://localhost:8090", "POST", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
+	if i := tx.ProcessRequestHeaders(); i != nil {
+		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+	}
+	body := "test"
+	if _, _, err := tx.ReadRequestBodyFrom(strings.NewReader(body)); err != nil {
+		t.Fatalf("Error reading request body: %v", err.Error())
+	}
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		t.Fatalf("Error processing request body: %v", err.Error())
+	}
+	tx.AddResponseHeader("content-type", "text/plain")
+	if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+		t.Fatalf("response headers should not be blocked, got interruption: %v", i)
+	}
+	if _, _, err := tx.WriteResponseBody([]byte(body)); err != nil {
+		t.Fatalf("Error writing response body: %v", err.Error())
+	}
+	if _, err := tx.ProcessResponseBody(); err != nil {
+		t.Fatalf("Error processing response body: %v", err.Error())
+	}
+
+	payload := tx.(WaceTransaction).httpPayload
+	if payload.RequestBody != body {
+		t.Errorf("expected request body %q for the RequestBody model, got %q", body, payload.RequestBody)
+	}
+	if payload.ResponseBody != "" {
+		t.Errorf("expected no response body without response body models, got %q", payload.ResponseBody)
+	}
 }

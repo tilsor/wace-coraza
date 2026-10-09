@@ -425,7 +425,11 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceModels 
 	}
 
 	initialRule := "SecAction \"id:" + strconv.Itoa(exceptionsInitRuleID) + ", phase:1, nolog," + modelsToSet + " pass\""
+	// The exceptions transaction only gets the bodies the main transaction
+	// buffered, so the body access and limits are decided by the main WAF.
 	conf.exceptionsConfig = conf.exceptionsConfig.
+		WithRequestBodyAccess().
+		WithResponseBodyAccess().
 		WithDirectives(initialRule).
 		WithDirectivesFromFile(filePath)
 	for _, rule := range finalsRules {

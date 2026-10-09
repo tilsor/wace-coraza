@@ -112,7 +112,9 @@ func TestTransactionRecordsMetrics(t *testing.T) {
 	gConfig = nil
 	defer resetWACE()
 
-	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+	// The exceptions duration is only recorded with an exceptions file.
+	wafConf := NewWaceWAFConfig().WithExceptionsFromFile("testdata/config/waceexceptions.conf").
+		WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
 		WithDirectivesFromFile("../coreruleset/rules/*.conf").
 		WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=10',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
@@ -123,6 +125,7 @@ func TestTransactionRecordsMetrics(t *testing.T) {
 	reader := useManualReader(t)
 
 	tx := waf.NewTransaction()
+	defer tx.Close()
 	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	tx.ProcessRequestHeaders()
@@ -203,4 +206,39 @@ func phasesOf(t *testing.T, m metricdata.Metrics) []int64 {
 	}
 	slices.Sort(phases)
 	return phases
+}
+
+// TestExceptionsMetricOnlyWithExceptions verifies that the exceptions duration
+// is not recorded without an exceptions file.
+func TestExceptionsMetricOnlyWithExceptions(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig.yaml"
+	gConfig = nil
+	defer resetWACE()
+
+	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+	reader := useManualReader(t)
+
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.AddRequestHeader("Host", "localhost")
+	tx.ProcessRequestHeaders()
+	tx.ProcessRequestBody()
+	tx.ProcessResponseHeaders(200, "HTTP/1.1")
+	tx.ProcessResponseBody()
+	tx.ProcessLogging()
+
+	got := collectMetrics(t, reader)
+	if _, ok := got["wace.waf.exceptions.duration"]; ok {
+		t.Errorf("metric wace.waf.exceptions.duration should not be recorded without an exceptions file")
+	}
+	if _, ok := got["wace.waf.transaction.duration"]; !ok {
+		t.Errorf("metric wace.waf.transaction.duration was not recorded")
+	}
 }
