@@ -332,21 +332,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessRequestHeaders()
-
-			activeModels = []string{}
-			requestHeadersExceptionRuleMessage := ""
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.RequestHeaders.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.RequestHeaders.String()] {
-				requestHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeModels = parseActiveModels(requestHeadersExceptionRuleMessage)
-
-				for _, model := range activeModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
+			activeModels, _ = t.exceptionActiveModels(cs.RequestHeaders)
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels[cs.RequestHeaders]
 		}
@@ -448,38 +434,8 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessRequestBody()
-
-			requestBodyExceptionRuleMessage := ""
-			requestExceptionRuleMessage := ""
-
-			activeRequestBodyModels = []string{}
-			activeRequestModels = []string{}
-
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.AllRequest.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.AllRequest.String()] {
-				requestExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeRequestModels = parseActiveModels(requestExceptionRuleMessage)
-
-				for _, model := range activeRequestModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
-
-			i = len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.RequestBody.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.RequestBody.String()] {
-				requestBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeRequestBodyModels = parseActiveModels(requestBodyExceptionRuleMessage)
-
-				for _, model := range activeRequestBodyModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
+			activeRequestBodyModels, _ = t.exceptionActiveModels(cs.RequestBody)
+			activeRequestModels, _ = t.exceptionActiveModels(cs.AllRequest)
 		} else {
 			activeRequestBodyModels = t.waf.waceWafConfig.waceModels[cs.RequestBody]
 			activeRequestModels = t.waf.waceWafConfig.waceModels[cs.AllRequest]
@@ -584,22 +540,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessResponseHeaders(code, proto)
-
-			responseHeadersExceptionRuleMessage := ""
-			activeModels = []string{}
-
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.ResponseHeaders.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.ResponseHeaders.String()] {
-				responseHeadersExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeModels = parseActiveModels(responseHeadersExceptionRuleMessage)
-
-				for _, model := range activeModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
+			activeModels, _ = t.exceptionActiveModels(cs.ResponseHeaders)
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels[cs.ResponseHeaders]
 		}
@@ -694,53 +635,9 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 
 		if t.waf.waceWafConfig.exceptionsFilePath != "" {
 			t.exceptionTransaction.ProcessResponseBody()
-			responseBodyExceptionRuleMessage := ""
-			responseExceptionRuleMessage := ""
-			everythingExceptionRuleMessage := ""
-			activeResponseBodyModels = []string{}
-			activeResponseModels = []string{}
-			activeEverythingModels = []string{}
-
-			i := len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.AllResponse.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.AllResponse.String()] {
-				responseExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeResponseModels = parseActiveModels(responseExceptionRuleMessage)
-
-				for _, model := range activeResponseModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-			}
-
-			i = len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.ResponseBody.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.ResponseBody.String()] {
-				responseBodyExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeResponseBodyModels = parseActiveModels(responseBodyExceptionRuleMessage)
-
-				for _, model := range activeResponseBodyModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-
-			}
-
-			i = len(t.exceptionTransaction.MatchedRules()) - 1
-			for i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() != gConfig.ruleIdsForExceptions[cs.Everything.String()] {
-				i--
-			}
-			if i > 0 && t.exceptionTransaction.MatchedRules()[i].Rule().ID() == gConfig.ruleIdsForExceptions[cs.Everything.String()] {
-				everythingExceptionRuleMessage = t.exceptionTransaction.MatchedRules()[i].Message()
-				activeEverythingModels = parseActiveModels(everythingExceptionRuleMessage)
-
-				for _, model := range activeEverythingModels {
-					getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
-				}
-
-			}
+			activeResponseBodyModels, _ = t.exceptionActiveModels(cs.ResponseBody)
+			activeResponseModels, _ = t.exceptionActiveModels(cs.AllResponse)
+			activeEverythingModels, _ = t.exceptionActiveModels(cs.Everything)
 		} else {
 			activeResponseBodyModels = t.waf.waceWafConfig.waceModels[cs.ResponseBody]
 			activeResponseModels = t.waf.waceWafConfig.waceModels[cs.AllResponse]
@@ -945,4 +842,27 @@ func InitMetrics(ctx context.Context, url string) (func(context.Context) error, 
 	setMeter(globalMeterProvider.Meter("waceWAF"))
 
 	return meterProvider.Shutdown, nil
+}
+
+// exceptionActiveModels returns the models of type mt reported as active by
+// the exceptions transaction, and whether the rule reporting them was matched.
+// The exceptions WAF only adds that rule for types with models, so the matched
+// rules are not searched when mt has none.
+func (t WaceTransaction) exceptionActiveModels(mt cs.ModelPluginType) ([]string, bool) {
+	if len(t.waf.waceWafConfig.waceModels[mt]) == 0 {
+		return nil, false
+	}
+	ruleID := gConfig.ruleIdsForExceptions[mt.String()]
+	rules := t.exceptionTransaction.MatchedRules()
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].Rule().ID() != ruleID {
+			continue
+		}
+		activeModels := parseActiveModels(rules[i].Message())
+		for _, model := range activeModels {
+			getLogger().Debug("active model", waceapi.LogKeyTxID, t.Transaction.ID(), "model", model)
+		}
+		return activeModels, true
+	}
+	return nil, false
 }

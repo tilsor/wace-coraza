@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
-	"github.com/corazawaf/coraza/v3/types"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
@@ -554,25 +553,14 @@ func TestBlockTransactionsEverythingModel(t *testing.T) {
 // exceptionsModelsByType maps each exception rule type to the only model of
 // that type declared in waceconfig_all_models.yaml. waceexceptions.conf
 // disables a model when the request URI contains its id.
-var exceptionsModelsByType = map[string]string{
-	"RequestHeaders":  "trivialRequestHeaders",
-	"RequestBody":     "trivialRequestBody",
-	"AllRequest":      "trivialAllRequest",
-	"ResponseHeaders": "trivialResponseHeaders",
-	"ResponseBody":    "trivialResponseBody",
-	"AllResponse":     "trivialAllResponse",
-	"Everything":      "trivialEverything",
-}
-
-// exceptionsActiveModels returns the models reported as active by the
-// exceptions rule of the given type, and whether that rule was matched.
-func exceptionsActiveModels(tx types.Transaction, exceptionType string) ([]string, bool) {
-	for _, rule := range tx.(WaceTransaction).exceptionTransaction.MatchedRules() {
-		if rule.Rule().ID() == gConfig.ruleIdsForExceptions[exceptionType] {
-			return parseActiveModels(rule.Message()), true
-		}
-	}
-	return nil, false
+var exceptionsModelsByType = map[configstore.ModelPluginType]string{
+	configstore.RequestHeaders:  "trivialRequestHeaders",
+	configstore.RequestBody:     "trivialRequestBody",
+	configstore.AllRequest:      "trivialAllRequest",
+	configstore.ResponseHeaders: "trivialResponseHeaders",
+	configstore.ResponseBody:    "trivialResponseBody",
+	configstore.AllResponse:     "trivialAllResponse",
+	configstore.Everything:      "trivialEverything",
 }
 
 // TestExceptions verifies that the exceptions file disables only the model
@@ -675,7 +663,7 @@ func testExceptions(t *testing.T, exceptionsFile string) {
 			}
 
 			for exceptionType, model := range exceptionsModelsByType {
-				activeModels, found := exceptionsActiveModels(tx, exceptionType)
+				activeModels, found := tx.(WaceTransaction).exceptionActiveModels(exceptionType)
 				if !found {
 					t.Errorf("expected the %s exceptions rule to be matched", exceptionType)
 					continue
@@ -735,7 +723,7 @@ func TestWithExceptionsFromFile(t *testing.T) {
 		t.Fatalf("request headers should not be blocked, got interruption: %v", i)
 	}
 
-	activeModels, found := exceptionsActiveModels(tx, "RequestHeaders")
+	activeModels, found := tx.(WaceTransaction).exceptionActiveModels(configstore.RequestHeaders)
 	if !found {
 		t.Fatal("expected the exceptions WAF to match the RequestHeaders exceptions rule")
 	}
