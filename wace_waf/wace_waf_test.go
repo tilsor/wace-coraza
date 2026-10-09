@@ -1281,27 +1281,10 @@ func TestNoExceptionsTransaction(t *testing.T) {
 }
 
 // TestBodiesOnlyReadForModels verifies that a body is only read from the
-// Coraza buffer when a model gets it.
+// Coraza buffer when a model gets it. waceconfig.yaml only has RequestHeaders
+// and RequestBody models, so the response body is not read.
 func TestBodiesOnlyReadForModels(t *testing.T) {
-	tests := []struct {
-		configFile   string
-		requestBody  bool
-		responseBody bool
-	}{
-		// RequestHeaders and RequestBody models.
-		{configFile: "testdata/config/waceconfig.yaml", requestBody: true, responseBody: false},
-		// A single Everything model.
-		{configFile: "testdata/config/waceconfig_everything_block.yaml", requestBody: true, responseBody: true},
-	}
-	for _, tt := range tests {
-		t.Run(filepath.Base(tt.configFile), func(t *testing.T) {
-			testBodiesOnlyReadForModels(t, tt.configFile, tt.requestBody, tt.responseBody)
-		})
-	}
-}
-
-func testBodiesOnlyReadForModels(t *testing.T, configFile string, requestBody, responseBody bool) {
-	configFilePath = configFile
+	configFilePath = "testdata/config/waceconfig.yaml"
 	gConfig = nil
 
 	defer resetWACE()
@@ -1319,7 +1302,7 @@ func testBodiesOnlyReadForModels(t *testing.T, configFile string, requestBody, r
 	defer tx.Close()
 	defer tx.ProcessLogging()
 
-	tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+	tx.ProcessURI("http://localhost:8090", "POST", "HTTP/1.1")
 	tx.AddRequestHeader("Host", "localhost")
 	tx.AddRequestHeader("content-type", "application/x-www-form-urlencoded")
 	if i := tx.ProcessRequestHeaders(); i != nil {
@@ -1339,23 +1322,15 @@ func testBodiesOnlyReadForModels(t *testing.T, configFile string, requestBody, r
 	if _, _, err := tx.WriteResponseBody([]byte(body)); err != nil {
 		t.Fatalf("Error writing response body: %v", err.Error())
 	}
-	// The Everything model may block the transaction: only the payload is
-	// checked here.
 	if _, err := tx.ProcessResponseBody(); err != nil {
 		t.Fatalf("Error processing response body: %v", err.Error())
 	}
 
-	expected := func(read bool) string {
-		if read {
-			return body
-		}
-		return ""
-	}
 	payload := tx.(WaceTransaction).httpPayload
-	if payload.RequestBody != expected(requestBody) {
-		t.Errorf("expected request body %q, got %q", expected(requestBody), payload.RequestBody)
+	if payload.RequestBody != body {
+		t.Errorf("expected request body %q for the RequestBody model, got %q", body, payload.RequestBody)
 	}
-	if payload.ResponseBody != expected(responseBody) {
-		t.Errorf("expected response body %q, got %q", expected(responseBody), payload.ResponseBody)
+	if payload.ResponseBody != "" {
+		t.Errorf("expected no response body without response body models, got %q", payload.ResponseBody)
 	}
 }

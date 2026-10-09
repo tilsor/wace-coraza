@@ -335,11 +335,10 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		if t.hasExceptions() {
 			t.exceptionTransaction.ProcessRequestHeaders()
 			activeModels, _ = t.exceptionActiveModels(cs.RequestHeaders)
+			getMetrics().recordExceptions(ctx, 1, start)
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels[cs.RequestHeaders]
 		}
-
-		getMetrics().recordExceptions(ctx, 1, start)
 
 		err := wace.Analyze(cs.RequestHeaders, t.Transaction.ID(), payload, activeModels)
 		if err != nil {
@@ -447,11 +446,11 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 			t.exceptionTransaction.ProcessRequestBody()
 			activeRequestBodyModels, _ = t.exceptionActiveModels(cs.RequestBody)
 			activeRequestModels, _ = t.exceptionActiveModels(cs.AllRequest)
+			getMetrics().recordExceptions(ctx, 2, start)
 		} else {
 			activeRequestBodyModels = t.waf.waceWafConfig.waceModels[cs.RequestBody]
 			activeRequestModels = t.waf.waceWafConfig.waceModels[cs.AllRequest]
 		}
-		getMetrics().recordExceptions(ctx, 2, start)
 
 		getLogger().Debug("processing request body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
@@ -545,11 +544,10 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		if t.hasExceptions() {
 			t.exceptionTransaction.ProcessResponseHeaders(code, proto)
 			activeModels, _ = t.exceptionActiveModels(cs.ResponseHeaders)
+			getMetrics().recordExceptions(ctx, 3, start)
 		} else {
 			activeModels = t.waf.waceWafConfig.waceModels[cs.ResponseHeaders]
 		}
-
-		getMetrics().recordExceptions(ctx, 3, start)
 
 		err := wace.Analyze(cs.ResponseHeaders, t.Transaction.ID(), waceapi.HTTPPayload{ResponseCode: t.httpPayload.ResponseCode, ResponseProtocol: t.httpPayload.ResponseProtocol, ResponseHeaders: t.httpPayload.ResponseHeaders}, activeModels)
 		if err != nil {
@@ -647,13 +645,12 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 			activeResponseBodyModels, _ = t.exceptionActiveModels(cs.ResponseBody)
 			activeResponseModels, _ = t.exceptionActiveModels(cs.AllResponse)
 			activeEverythingModels, _ = t.exceptionActiveModels(cs.Everything)
+			getMetrics().recordExceptions(ctx, 4, start)
 		} else {
 			activeResponseBodyModels = t.waf.waceWafConfig.waceModels[cs.ResponseBody]
 			activeResponseModels = t.waf.waceWafConfig.waceModels[cs.AllResponse]
 			activeEverythingModels = t.waf.waceWafConfig.waceModels[cs.Everything]
 		}
-
-		getMetrics().recordExceptions(ctx, 4, start)
 
 		getLogger().Debug("processing response body by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
