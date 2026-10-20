@@ -2,9 +2,11 @@ package waceWAF
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -26,7 +28,12 @@ type generalConfig struct {
 	crsVersion           string
 	blocking             bool
 	ruleIdsForExceptions map[string]int
-	hash                 string
+	// hash identifies the whole parsed configuration, to tell whether a
+	// Reload changes it.
+	hash string
+	// version identifies the part of the configuration that WAFs are
+	// built with. It is returned by ConfigVersion.
+	version string
 }
 
 // WaceWAFConfig implements the WAFConfig interface and adds the specific configuration for the WaceWAF.
@@ -42,6 +49,9 @@ type WaceWAFConfig struct {
 	earlyBlocking         bool
 	disableCRS            bool
 	blocking              bool
+	// exceptionRuleIDs are the ids of the rules that report the active
+	// models in the exceptions WAF, from the general configuration.
+	exceptionRuleIDs map[string]int
 }
 
 // WaceModels holds the model ids for the different types of models
@@ -112,6 +122,99 @@ func dataHash(data []byte) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
+// jsonHash returns the hash of the JSON encoding of v, which sorts the map
+// keys, so the order of the keys, the comments and the formatting of the
+// config file do not change it. The order of the lists does.
+func jsonHash(v any) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return dataHash(data), nil
+}
+
+// wafVersionData holds the general configuration fields that WAFs are
+// built with: the defaults used without an app config and the plugins an
+// app config is validated against. crs_version and exception_ids are left
+// out because they cannot change on reload.
+type wafVersionData struct {
+	EarlyBlocking   bool
+	Blocking        bool
+	DefaultDecision string
+	ModelPlugins    map[string]wafVersionModel
+	DecisionPlugins map[string]bool
+}
+
+type wafVersionModel struct {
+	PluginType string
+	Training   bool
+}
+
+// readGeneralConfig reads and parses the general configuration file, and
+// computes its default plugins and hashes.
+func readGeneralConfig() (*generalConfig, waceGeneralConfigFileData, error) {
+	fail := func(err error) (*generalConfig, waceGeneralConfigFileData, error) {
+		return nil, waceGeneralConfigFileData{}, fmt.Errorf("Error loading general config: %v", err)
+	}
+
+	data, err := os.ReadFile(configFilePath)
+	if err != nil {
+		return fail(err)
+	}
+
+	g := new(generalConfig)
+	confData, err := g.LoadConfig(data)
+	if err != nil {
+		return fail(err)
+	}
+
+	// The default plugins are taken before the WACE core gets the
+	// configuration, so it is not applied if they are not valid.
+	// TODO: review the flow when the init or reload of a plugin fails
+	if err := g.setDefaultPlugins(confData); err != nil {
+		return fail(err)
+	}
+
+	g.hash, err = jsonHash(confData)
+	if err != nil {
+		return fail(err)
+	}
+
+	version := wafVersionData{
+		EarlyBlocking:   g.earlyBlocking,
+		Blocking:        g.blocking,
+		DefaultDecision: g.waceDecision,
+		ModelPlugins:    map[string]wafVersionModel{},
+		DecisionPlugins: map[string]bool{},
+	}
+	for _, mp := range confData.ModelPlugins {
+		version.ModelPlugins[mp.ID] = wafVersionModel{PluginType: mp.PluginType, Training: mp.Training}
+	}
+	for _, dp := range confData.DecisionPlugins {
+		version.DecisionPlugins[dp.ID] = dp.Training
+	}
+	g.version, err = jsonHash(version)
+	if err != nil {
+		return fail(err)
+	}
+
+	return g, confData, nil
+}
+
+// checkFixedFields returns an error if next changes a field of current
+// that cannot change on reload.
+func checkFixedFields(current, next *generalConfig) error {
+	if next.crsVersion != current.crsVersion {
+		return fmt.Errorf("crs_version cannot be changed on reload, from %q to %q: revert it in %s or restart to apply it",
+			current.crsVersion, next.crsVersion, configFilePath)
+	}
+	if !maps.Equal(next.ruleIdsForExceptions, current.ruleIdsForExceptions) {
+		return fmt.Errorf("exception_ids cannot be changed on reload, from %v to %v: revert them in %s or restart to apply them",
+			current.ruleIdsForExceptions, next.ruleIdsForExceptions, configFilePath)
+	}
+	return nil
+}
+
 // LoadConfig loads the general configuration from the config file to memory
 func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, error) {
 	var confData waceGeneralConfigFileData
@@ -174,28 +277,30 @@ func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData) error {
 // it is used when the application configuration is not provided in a file.
 // It uses the first decision plugin and uses all the models declared in the general configuration
 func (w *WaceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
-	w.earlyBlocking = gConfig.earlyBlocking
+	w.earlyBlocking = g.earlyBlocking
 	w.blocking = g.blocking
 	w.waceModels = g.waceModels
 	w.waceDecisionIds = []string{g.waceDecision}
 }
 
-// getDefaultPlugins gets the list of non-training plugin IDs from WACE ConfigStore after they were validated
+// getDefaultPlugins gets the non-training model plugin IDs and the first
+// non-training decision plugin ID of the general configuration
 func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (WaceModels, string, error) {
-	config, err := cs.Get()
-	if err != nil {
-		return WaceModels{}, "", err
-	}
 	models := make(WaceModels)
-	for _, model := range config.ModelPlugins {
+	for _, model := range loadedConf.ModelPlugins {
 		// We do not want to collect data for every new application, only for the indended ones.
-		if !model.Training {
-			models[model.PluginType] = append(models[model.PluginType], model.ID)
+		if model.Training {
+			continue
 		}
+		pluginType, err := cs.StringToPluginType(model.PluginType)
+		if err != nil {
+			return WaceModels{}, "", fmt.Errorf("model plugin %s: %v", model.ID, err)
+		}
+		models[pluginType] = append(models[pluginType], model.ID)
 	}
 
 	for _, dp := range loadedConf.DecisionPlugins {
-		if _, ok := config.DecisionPlugins[dp.ID]; ok && !config.DecisionPlugins[dp.ID].Training {
+		if !dp.Training {
 			return models, dp.ID, nil
 		}
 	}
@@ -410,6 +515,10 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceModels 
 	modelsToSet := ""
 	modelsToGet := ""
 	finalRule := ""
+	ruleIDs := conf.exceptionRuleIDs
+	if ruleIDs == nil {
+		ruleIDs = defaultExceptionRuleIDs()
+	}
 
 	for i := cs.RequestHeaders; i.IsValid(); i++ {
 		if len(waceModels[i]) != 0 {
@@ -417,7 +526,7 @@ func (conf *WaceWAFConfig) LoadExceptionsDirectives(filePath string, waceModels 
 				modelsToSet += "setvar:tx." + model + "=true,"
 				modelsToGet += model + ":%{tx." + model + "},"
 			}
-			finalRule = "SecAction \"id:" + strconv.Itoa(gConfig.ruleIdsForExceptions[i.String()]) + ", phase:" + exceptionPhase[i] + ", nolog, msg:'" + modelsToGet + "', pass\""
+			finalRule = "SecAction \"id:" + strconv.Itoa(ruleIDs[i.String()]) + ", phase:" + exceptionPhase[i] + ", nolog, msg:'" + modelsToGet + "', pass\""
 			finalsRules = append(finalsRules, finalRule)
 
 			modelsToGet = ""

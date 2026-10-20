@@ -10,7 +10,17 @@
 This section provides details on each field within the configuration files and their purposes. These configurations are necessary to control how the system processes requests, handles plugins, manages logging, and more.
 
 ### File: waceconfig.yaml
-Logging is not configured in this file. Call `waceWAF.SetLogger` with a `*slog.Logger` before `NewWAF` (by default `slog.Default()` is used). The logger must not carry a `component` attribute: WACE WAF logs with `component=wace-waf` and the WACE core adds its own.
+The file is read from the path in the `WACE_CONFIG_FILEPATH` environment variable, or from `waceconfig.yaml` in the working directory.
+
+The file is read once, by the first `NewWAF` or `waceWAF.Reload`, whichever comes first. `NewWAF` never reads it again: to apply changes without restarting, call `waceWAF.Reload` with a `*slog.Logger` (or nil for `slog.Default()`). `Reload` compares the parsed configuration, so changes in comments or formatting are ignored; if nothing else changed, it only replaces the logger. If the new configuration is rejected, the previous one is kept.
+
+`crs_version` and `exception_ids` cannot change on reload: a `Reload` that changes them is rejected, and every later one too, until they are reverted or the process is restarted. In Caddy, the rejection fails the config load, so Caddy keeps running the previous config.
+
+A WAF keeps the configuration it was created with, so the WAFs have to be created again after a `Reload` that changes it. `waceWAF.ConfigVersion` returns an identifier of the part of the configuration WAFs are built with: when it changes, the WAFs have to be recreated; when only plugin parameters or other fields applied by the WACE core change, it does not.
+
+A `Reload` is not undone if the integration later discards the reload for another reason: for example, if another module fails the Caddy config load after `Reload` applied the configuration, the WAFs of the previous Caddy config keep running with the new WACE core configuration until the next successful load.
+
+Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF.SetLogger`, which replaces it without reading the file, and `Reload` sets the one it gets. The logger must not carry a `component` attribute: WACE WAF logs with `component=wace-waf` and the WACE core adds its own.
 
 **Plugins configuration**
 - model_plugins: Defines the plugins used for processing transactions.

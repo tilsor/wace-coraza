@@ -144,10 +144,7 @@ func TestGetConfigRules(t *testing.T) {
 }
 
 func TestNewConfig(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -166,7 +163,7 @@ func TestNewConfig(t *testing.T) {
 		cs.RequestBody:    {"trivial2"},
 	}
 
-	if !reflect.DeepEqual(gConfig.waceModels, expected) {
+	if !reflect.DeepEqual(gConfig.Load().waceModels, expected) {
 		t.Errorf("Error: models do not match expected %v, got %v", expected, conf)
 	}
 }
@@ -276,10 +273,7 @@ func TestExceptionRuleIDs(t *testing.T) {
 // with loadConfig and applied with loadWaceAppConfig loads its model and
 // decision plugin ids.
 func TestWaceWAFConfigLoadConfig(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -313,10 +307,7 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 // early_blocking, disable_crs, blocking and app_name fields from a
 // per-app waceappconfig.yaml file.
 func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -447,16 +438,15 @@ func TestWithWaceAppConfig(t *testing.T) {
 // unset here, so a transaction could never be denied unless a per-app config
 // file was used.
 func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
-	gConfig = &generalConfig{
+	g := generalConfig{
 		earlyBlocking: true,
 		blocking:      true,
 		waceModels:    WaceModels{},
 		waceDecision:  "weighted_sum",
 	}
-	defer func() { gConfig = nil }()
 
 	w := &WaceWAFConfig{}
-	w.LoadConfigFromGeneralConfig(*gConfig)
+	w.LoadConfigFromGeneralConfig(g)
 
 	if !w.blocking {
 		t.Error("expected blocking to be propagated from general config, got false")
@@ -476,10 +466,7 @@ func TestLoadConfigFromGeneralConfigPropagatesBlocking(t *testing.T) {
 // WAF creation would fail because the injected SecRuleUpdateActionById
 // directives reference CRS rule ids that don't exist.
 func TestNewWAFDisableCRS(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml")
@@ -495,10 +482,7 @@ func TestNewWAFDisableCRS(t *testing.T) {
 // must fail. This proves TestNewWAFDisableCRS passes because of disable_crs,
 // not because the directives are always skipped.
 func TestNewWAFCRSRequiredWithoutDisableCRS(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/app1waceappconfig.yaml")
@@ -513,10 +497,7 @@ func TestNewWAFCRSRequiredWithoutDisableCRS(t *testing.T) {
 // As in TestNewWAFDisableCRS, the CRS ruleset is not loaded, so WAF creation
 // only succeeds if disable_crs from the in-memory configuration is honored.
 func TestNewWAFWithWaceAppConfig(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -549,10 +530,7 @@ func TestNewWAFWithWaceAppConfig(t *testing.T) {
 // disables it; since the CRS ruleset is not loaded, WAF creation only
 // succeeds if the file's disable_crs is the one applied.
 func TestNewWAFAppConfigFileTakesPrecedence(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -574,10 +552,7 @@ func TestNewWAFAppConfigFileTakesPrecedence(t *testing.T) {
 // configuration goes through the same validation as a file: decision ids
 // missing from the general configuration make WAF creation fail.
 func TestNewWAFWithWaceAppConfigUnknownDecision(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConfig := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -597,10 +572,7 @@ func TestNewWAFWithWaceAppConfigUnknownDecision(t *testing.T) {
 // TestNewWAFAppConfigFileNotFound verifies that NewWAF reports a missing
 // waceappconfig.yaml file as a read error, including the file path.
 func TestNewWAFAppConfigFileNotFound(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	filePath := "testdata/config/missingwaceappconfig.yaml"
 	wafConfig := NewWAFConfig().WithDirectivesFromFile(filePath)
@@ -614,10 +586,7 @@ func TestNewWAFAppConfigFileNotFound(t *testing.T) {
 }
 
 func TestNewWaceDefaultModelsConfig(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_all_models.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -637,8 +606,8 @@ func TestNewWaceDefaultModelsConfig(t *testing.T) {
 		cs.Everything:      {"trivialEverything"},
 	}
 
-	if !reflect.DeepEqual(gConfig.waceModels, expected) {
-		t.Errorf("Error: models do not match expected %v, got %v", expected, gConfig.waceModels)
+	if !reflect.DeepEqual(gConfig.Load().waceModels, expected) {
+		t.Errorf("Error: models do not match expected %v, got %v", expected, gConfig.Load().waceModels)
 	}
 
 	models := []string{
@@ -711,10 +680,7 @@ ruleidsforexceptions:
 // waceappconfig.yaml should not silently start collecting training data),
 // is still loaded when an app explicitly lists it in model_ids.
 func TestNewWAFWithTrainingModel(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_training_valid.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_training_valid.yaml")
 
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -724,11 +690,11 @@ func TestNewWAFWithTrainingModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for valid training model config, got: %v", err)
 	}
-	if gConfig.waceModels == nil {
+	if gConfig.Load().waceModels == nil {
 		t.Fatal("waceModels is nil after loading training config")
 	}
-	if len(gConfig.waceModels[cs.RequestHeaders]) != 0 {
-		t.Errorf("expected the training model to be excluded from the general config's default models, got %v", gConfig.waceModels[cs.RequestHeaders])
+	if len(gConfig.Load().waceModels[cs.RequestHeaders]) != 0 {
+		t.Errorf("expected the training model to be excluded from the general config's default models, got %v", gConfig.Load().waceModels[cs.RequestHeaders])
 	}
 	if len(waf.waceWafConfig.waceModels[cs.RequestHeaders]) == 0 {
 		t.Error("expected training model to be present in the RequestHeaders models when opted in via the app config")
@@ -757,14 +723,14 @@ func TestNewWAFWithInvalidTrainingConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configFilePath = tt.configFile
-			gConfig = nil
-
+			resetWACE()
 			defer resetWACE()
 
-			wafConfig := NewWAFConfig()
-			_, err := NewWAF(wafConfig)
-			if err == nil {
+			if _, err := NewWAF(NewWAFConfig()); err == nil {
 				t.Error("expected error but got none")
+			}
+			if gConfig.Load() != nil {
+				t.Error("expected WACE not to be initialized after a failed initialization")
 			}
 		})
 	}
