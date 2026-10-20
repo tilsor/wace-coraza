@@ -107,7 +107,7 @@ type metricsState struct {
 	shutdown    func(context.Context) error
 }
 
-// currentMetrics holds the current metrics state. It is replaced by NewWAF
+// currentMetrics holds the current metrics state. It is replaced by Reload
 // when otel_url changes, while transactions may be recording on it.
 var currentMetrics atomic.Pointer[metricsState]
 

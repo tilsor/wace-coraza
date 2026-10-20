@@ -20,11 +20,23 @@ import (
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
 
-// resetWACE drops the configuration so the next test initializes WACE
+// resetWACE drops the configuration so the next Reload initializes WACE
 // again.
 func resetWACE() {
-	gConfig = nil
+	gConfig.Store(nil)
 	configstore.Clean()
+}
+
+// reloadWACE initializes WACE from scratch with the general config at
+// path, and resets it when the test ends.
+func reloadWACE(tb testing.TB, path string) {
+	tb.Helper()
+	configFilePath = path
+	resetWACE()
+	tb.Cleanup(resetWACE)
+	if err := Reload(nil); err != nil {
+		tb.Fatalf("Error initializing WACE: %v", err)
+	}
 }
 
 func TestResolveConfigFilePathUsesEnvVar(t *testing.T) {
@@ -57,11 +69,266 @@ func TestResolveConfigFilePathDefaultWhenEnvVarUnset(t *testing.T) {
 	}
 }
 
-func TestNewWaf(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
+// writeGeneralConfig writes data to a temporary general config file and
+// points configFilePath to it.
+func writeGeneralConfig(tb testing.TB, path string, data []byte) {
+	tb.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		tb.Fatalf("Error writing general config: %v", err)
+	}
+	configFilePath = path
+}
 
-	defer resetWACE()
+// TestNewWAFInitializes verifies that the first NewWAF initializes WACE
+// with the logger set by SetLogger, and that the following ones use the
+// same general config.
+func TestNewWAFInitializes(t *testing.T) {
+	configFilePath = "testdata/config/waceconfig_all_models.yaml"
+	resetWACE()
+	t.Cleanup(resetWACE)
+	l := slog.New(slog.DiscardHandler)
+	SetLogger(l)
+	t.Cleanup(func() { SetLogger(nil) })
+
+	newWAF := func() *WaceWAF {
+		t.Helper()
+		waf, err := NewWAF(NewWAFConfig().
+			WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+			WithDirectivesFromFile("../coreruleset/rules/*.conf"))
+		if err != nil {
+			t.Fatalf("Error creating WAF: %v", err)
+		}
+		return waf
+	}
+
+	waf := newWAF()
+	g := gConfig.Load()
+	if g == nil {
+		t.Fatal("expected NewWAF to initialize WACE")
+	}
+	if waf.general != g {
+		t.Error("expected the WAF to keep the general config it was created with")
+	}
+	if ConfigVersion() == "" {
+		t.Error("expected a config version after the initialization")
+	}
+	if getCoreLogger() != l {
+		t.Error("expected the initialization to keep the logger set by SetLogger")
+	}
+
+	if newWAF().general != g {
+		t.Error("expected a second NewWAF to use the same general config")
+	}
+}
+
+// TestConfigVersionBeforeInit verifies that ConfigVersion is empty before
+// WACE is initialized.
+func TestConfigVersionBeforeInit(t *testing.T) {
+	resetWACE()
+	if v := ConfigVersion(); v != "" {
+		t.Errorf("expected an empty config version, got %q", v)
+	}
+}
+
+// TestReloadUnchangedConfig verifies that a Reload with the same general
+// config, or one that only differs in comments and formatting, keeps it and
+// only replaces the logger.
+func TestReloadUnchangedConfig(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig_all_models.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "same file", data: data},
+		{name: "comments and blank lines", data: append([]byte("# a new comment\n\n"), data...)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "waceconfig.yaml")
+			writeGeneralConfig(t, path, data)
+			reloadWACE(t, path)
+			t.Cleanup(func() { SetLogger(nil) })
+			g := gConfig.Load()
+
+			writeGeneralConfig(t, path, tt.data)
+			l := slog.New(slog.DiscardHandler)
+			if err := Reload(l); err != nil {
+				t.Fatalf("Error reloading WACE: %v", err)
+			}
+			if gConfig.Load() != g {
+				t.Error("expected the general config to be kept")
+			}
+			if getCoreLogger() != l {
+				t.Error("expected the logger to be replaced")
+			}
+		})
+	}
+}
+
+// TestReloadChangedConfig verifies that a Reload applies a changed general
+// config, that a WAF created before it keeps the one it was created with,
+// and that ConfigVersion only changes when the WAFs are built differently.
+func TestReloadChangedConfig(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig_all_models.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		old, new       string
+		versionChanges bool
+	}{
+		{
+			name:           "decision plugin parameter",
+			old:            `threshold: "0.5"`,
+			new:            `threshold: "0.6"`,
+			versionChanges: false,
+		},
+		{
+			name:           "early blocking",
+			old:            "early_blocking: true",
+			new:            "early_blocking: false",
+			versionChanges: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "waceconfig.yaml")
+			writeGeneralConfig(t, path, data)
+			reloadWACE(t, path)
+			g := gConfig.Load()
+			version := ConfigVersion()
+
+			waf, err := NewWAF(NewWAFConfig().
+				WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+				WithDirectivesFromFile("../coreruleset/rules/*.conf"))
+			if err != nil {
+				t.Fatalf("Error creating WAF: %v", err)
+			}
+
+			changed := strings.Replace(string(data), tt.old, tt.new, 1)
+			if changed == string(data) {
+				t.Fatalf("the general config testdata does not have %q", tt.old)
+			}
+			writeGeneralConfig(t, path, []byte(changed))
+			if err := Reload(nil); err != nil {
+				t.Fatalf("Error reloading WACE: %v", err)
+			}
+			if gConfig.Load() == g {
+				t.Fatal("expected the changed general config to be applied")
+			}
+			if waf.general != g {
+				t.Error("expected the WAF created before the reload to keep its general config")
+			}
+			if got := ConfigVersion() != version; got != tt.versionChanges {
+				t.Errorf("expected the config version to change: %v, got %v", tt.versionChanges, got)
+			}
+		})
+	}
+}
+
+// TestReloadRejectedConfig verifies that a Reload with a general config
+// rejected by WACE WAF or by the WACE core keeps the previous one and its
+// logger.
+func TestReloadRejectedConfig(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig_all_models.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		old, new string
+		// errContains is part of the expected error, if it is not empty.
+		errContains string
+	}{
+		{
+			name: "invalid exception ids",
+			old:  "  Everything: 700\n",
+			new:  "  Everything: 700\n  NotAType: 1\n",
+		},
+		{
+			name: "nats_url changed",
+			old:  "early_blocking: true\n",
+			new:  "early_blocking: true\nnats_url: \"nats://localhost:4222\"\n",
+		},
+		{
+			name:        "crs_version changed",
+			old:         `crs_version: "4.4.0-dev"`,
+			new:         `crs_version: "4.5.0"`,
+			errContains: "crs_version cannot be changed on reload",
+		},
+		{
+			name:        "exception_ids changed",
+			old:         "  RequestHeaders: 100\n",
+			new:         "  RequestHeaders: 150\n",
+			errContains: "exception_ids cannot be changed on reload",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "waceconfig.yaml")
+			writeGeneralConfig(t, path, data)
+			reloadWACE(t, path)
+			g := gConfig.Load()
+			l := getCoreLogger()
+
+			changed := strings.Replace(string(data), tt.old, tt.new, 1)
+			if changed == string(data) {
+				t.Fatalf("the general config testdata does not have %q", tt.old)
+			}
+			writeGeneralConfig(t, path, []byte(changed))
+			err := Reload(slog.New(slog.DiscardHandler))
+			if err == nil {
+				t.Fatal("expected the general config to be rejected")
+			}
+			if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("expected an error containing %q, got %v", tt.errContains, err)
+			}
+			if gConfig.Load() != g {
+				t.Error("expected the previous general config to be kept")
+			}
+			if getCoreLogger() != l {
+				t.Error("expected the previous logger to be kept")
+			}
+		})
+	}
+}
+
+// TestReloadWithoutDefaultDecision verifies that a general config without
+// a non-training decision plugin is rejected before the WACE core gets it,
+// so a later Reload can still initialize it.
+func TestReloadWithoutDefaultDecision(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig_all_models.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+	training := strings.Replace(string(data), "  - id: \"weighted_sum\"\n", "  - id: \"weighted_sum\"\n    training: true\n", 1)
+	if training == string(data) {
+		t.Fatal("the general config testdata does not have the expected decision plugin")
+	}
+
+	resetWACE()
+	t.Cleanup(resetWACE)
+	writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(training))
+	if err := Reload(nil); err == nil {
+		t.Fatal("expected the general config to be rejected")
+	}
+	if _, err := configstore.Get(); err == nil {
+		t.Error("expected the WACE core not to get the rejected config")
+	}
+}
+
+func TestNewWaf(t *testing.T) {
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 	wafConfig := NewWAFConfig().
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
 		WithDirectivesFromFile("../coreruleset/rules/*.conf")
@@ -73,10 +340,7 @@ func TestNewWaf(t *testing.T) {
 
 func TestTransactionAddData(t *testing.T) {
 	// Every model type is configured, so the payload has every field.
-	configFilePath = "testdata/config/waceconfig_all_models.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -149,10 +413,7 @@ func TestTransactionAddData(t *testing.T) {
 
 func TestTransactionWithIDAddData(t *testing.T) {
 	// Every model type is configured, so the payload has every field.
-	configFilePath = "testdata/config/waceconfig_all_models.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -224,10 +485,7 @@ func TestTransactionWithIDAddData(t *testing.T) {
 }
 
 func TestTransactionProcess(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").WithDirectivesFromFile("../coreruleset/rules/*.conf")
 
@@ -292,10 +550,7 @@ func TestTransactionProcess(t *testing.T) {
 }
 
 func TestBlockTransactions(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_block_transaction.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_block_transaction.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -370,10 +625,7 @@ func TestBlockTransactions(t *testing.T) {
 // denied: the blocking config flag gates whether WACE's decision actually
 // results in an interruption, independent of the decision plugin's result.
 func TestBlockTransactionsBlockingDisabled(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_block_transaction_blocking_disabled.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_block_transaction_blocking_disabled.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -427,10 +679,7 @@ func TestBlockTransactionsBlockingDisabled(t *testing.T) {
 // has blocking: false but the app config has blocking: true, so the
 // transaction must still be denied.
 func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_block_transaction_general_no_block.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_block_transaction_general_no_block.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -462,10 +711,7 @@ func TestBlockTransactionsAppConfigOverridesGeneralBlocking(t *testing.T) {
 // configuration with blocking: true must take priority over the general
 // config's blocking: false.
 func TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_block_transaction_general_no_block.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_block_transaction_general_no_block.yaml")
 
 	wafConf := NewWaceWAFConfig().
 		WithWaceAppConfig(WaceAppConfigFileData{
@@ -503,10 +749,7 @@ func TestBlockTransactionsInMemoryAppConfigOverridesGeneralBlocking(t *testing.T
 // evaluation itself). This is the classic virtual-patching use case: a
 // hand-written rule blocking a known-bad request without CRS loaded at all.
 func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConf := NewWAFConfig().
 		WithDirectivesFromFile("testdata/config/disablecrswaceappconfig.yaml").
@@ -549,10 +792,7 @@ func TestVirtualPatchingWithCRSDisabled(t *testing.T) {
 // block (only the low CRS anomaly score counts there), while phase 4 must block
 // because the model reports a 1.0 probability of attack and outweighs the WAF.
 func TestBlockTransactionsEverythingModel(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_everything_block.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_everything_block.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -639,10 +879,7 @@ func TestExceptions(t *testing.T) {
 }
 
 func testExceptions(t *testing.T, exceptionsFile string) {
-	configFilePath = "testdata/config/waceconfig_all_models.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
 
 	wafConf := NewWaceWAFConfig().
 		WithExceptionsFromFile(exceptionsFile).
@@ -740,10 +977,7 @@ func testExceptions(t *testing.T, exceptionsFile string) {
 // request URI triggers the exception that disables trivialRequestHeaders: the
 // exceptions WAF must then report that model as inactive in phase 1.
 func TestWithExceptionsFromFile(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_all_models.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
 
 	data, err := os.ReadFile("testdata/config/waceexceptions.conf")
 	if err != nil {
@@ -790,10 +1024,7 @@ func TestWithExceptionsFromFile(t *testing.T) {
 // TestWithExceptionsFromFileNotFound verifies that a missing exceptions file
 // makes WAF creation fail with an error that names the file.
 func TestWithExceptionsFromFileNotFound(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	exceptionsPath := "testdata/config/missing_exceptions.conf"
 	wafConf := NewWaceWAFConfig().
@@ -818,10 +1049,7 @@ func TestWithExceptionsFromFileNotFound(t *testing.T) {
 // in sync mode. Compare with TestBlockTransactions which uses trivial2 as a
 // sync model and expects a block.
 func TestTrainingModelNotUsedInDecision(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_training_no_block.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_training_no_block.yaml")
 
 	// Set WAF anomaly scores to zero so only model scores can trigger blocking.
 	// trivial2 (weight=1, attack=1.0) is in training mode and must be excluded
@@ -859,14 +1087,16 @@ var benchRunCounter atomic.Uint64
 func newBenchWaceWAF(b *testing.B, configPath string) coraza.WAF {
 	b.Helper()
 	configFilePath = configPath
-	gConfig = nil
-	// Logs share stdout with the results under go test and would break
-	// the lines benchstat parses.
-	SetLogger(slog.New(slog.DiscardHandler))
+	resetWACE()
 	b.Cleanup(func() {
 		resetWACE()
 		SetLogger(nil)
 	})
+	// Logs share stdout with the results under go test and would break
+	// the lines benchstat parses.
+	if err := Reload(slog.New(slog.DiscardHandler)); err != nil {
+		b.Fatalf("Error initializing WACE: %v", err)
+	}
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("../coraza.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -1029,8 +1259,7 @@ func BenchmarkCorazaTransactionsParallel(b *testing.B) {
 // the main and the exceptions transactions have access to the bodies.
 func newExceptionsBodyWAF(t *testing.T) *WaceWAF {
 	t.Helper()
-	configFilePath = "testdata/config/waceconfig_all_models.yaml"
-	gConfig = nil
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
 
 	wafConf := NewWaceWAFConfig().
 		WithExceptionsFromFile("testdata/config/waceexceptions.conf").
@@ -1051,7 +1280,6 @@ func newExceptionsBodyWAF(t *testing.T) *WaceWAF {
 // body when the exceptions transaction also has access to it, and that the
 // exceptions transaction and the models get the same body.
 func TestRequestBodyWithExceptions(t *testing.T) {
-	defer resetWACE()
 	waf := newExceptionsBodyWAF(t)
 
 	tx := waf.NewTransaction()
@@ -1093,7 +1321,6 @@ func TestRequestBodyWithExceptions(t *testing.T) {
 // TestResponseBodyChunks verifies that the models and the exceptions
 // transaction get the whole response body when it is written in chunks.
 func TestResponseBodyChunks(t *testing.T) {
-	defer resetWACE()
 	waf := newExceptionsBodyWAF(t)
 
 	tx := waf.NewTransaction()
@@ -1141,10 +1368,7 @@ func TestResponseBodyChunks(t *testing.T) {
 // request body is not read beyond the limit: the models get the body up to
 // the limit and the rest is left in the reader for the backend.
 func TestRequestBodyProcessPartial(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	const limit = 10
 	wafConf := NewWAFConfig().
@@ -1250,10 +1474,7 @@ func TestCloseWithoutExceptions(t *testing.T) {
 // TestNoExceptionsTransaction verifies that no exceptions WAF nor
 // exceptions transactions are created without an exceptions file.
 func TestNoExceptionsTransaction(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
@@ -1284,10 +1505,7 @@ func TestNoExceptionsTransaction(t *testing.T) {
 // Coraza buffer when a model gets it. waceconfig.yaml only has RequestHeaders
 // and RequestBody models, so the response body is not read.
 func TestBodiesOnlyReadForModels(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").

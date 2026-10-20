@@ -35,6 +35,8 @@ type WaceWAF struct {
 	// exceptionWAF is nil if there is no exceptions file.
 	exceptionWAF  coraza.WAF
 	waceWafConfig *WaceWAFConfig
+	// general is the general configuration the WAF was created with.
+	general *generalConfig
 }
 
 // WaceTransaction implements the Transaction interface provided by Coraza WAF and adds the WACE functionality to it
@@ -50,7 +52,13 @@ type WaceTransaction struct {
 	coordinator          *sync.WaitGroup
 }
 
-var gConfig *generalConfig
+// gConfig holds the current general configuration. It is nil until WACE
+// WAF is initialized by the first NewWAF or Reload.
+var gConfig atomic.Pointer[generalConfig]
+
+// reloadMu serializes the initialization and Reload.
+var reloadMu sync.Mutex
+
 var ctx = context.Background()
 
 var configFilePath string
@@ -74,13 +82,18 @@ var currentLoggers atomic.Pointer[loggers]
 // is used. l must not carry a component attribute: WACE WAF and the WACE
 // core add their own.
 func SetLogger(l *slog.Logger) {
+	currentLoggers.Store(newLoggers(l))
+}
+
+// newLoggers returns the loggers for l, or for slog.Default() if l is nil.
+func newLoggers(l *slog.Logger) *loggers {
 	if l == nil {
 		l = slog.Default()
 	}
-	currentLoggers.Store(&loggers{
+	return &loggers{
 		core: l,
 		waf:  l.With(waceapi.LogKeyComponent, componentName),
-	})
+	}
 }
 
 // getLogger returns the logger of WACE WAF, with the component attribute.
@@ -106,77 +119,128 @@ func init() {
 	SetLogger(nil)
 }
 
-// NewWAF creates a new WaceWAF object with the given configuration
-func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
-	if gConfig == nil {
-		gConfig = new(generalConfig)
-		data, err := os.ReadFile(configFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("Error loading general config: %v", err)
+// Reload reads the WACE general configuration and applies it with logger.
+// If WACE WAF is not initialized yet, it initializes it. If the
+// configuration did not change, only the logger is replaced. If logger is
+// nil, slog.Default() is used. If the configuration is rejected, the
+// previous one is kept, along with its metrics and logger. crs_version and
+// exception_ids cannot change: a Reload that changes them is rejected.
+//
+// A WAF keeps the general configuration it was created with, so the WAFs
+// have to be created again after a Reload that changes ConfigVersion.
+func Reload(logger *slog.Logger) error {
+	reloadMu.Lock()
+	defer reloadMu.Unlock()
+
+	newGC, confData, err := readGeneralConfig()
+	if err != nil {
+		return err
+	}
+
+	current := gConfig.Load()
+	if current != nil {
+		if newGC.hash == current.hash {
+			// TODO: the WACE core only takes a new logger through
+			// wace.Reload, which reloads every plugin, so it keeps the
+			// previous one until the configuration changes. Pass it
+			// once the WACE core exports SetLogger.
+			SetLogger(logger)
+			return nil
 		}
-
-		confData, err := gConfig.LoadConfig(data)
-		if err != nil {
-			return nil, fmt.Errorf("Error loading general config: %v", err)
+		if err := checkFixedFields(current, newGC); err != nil {
+			return fmt.Errorf("Error loading general config: %v", err)
 		}
+	}
 
-		metrics, err := newMetrics(ctx, gConfig.otelURL)
+	if err := applyGeneralConfig(current, newGC, confData, newLoggers(logger)); err != nil {
+		return err
+	}
+	gConfig.Store(newGC)
+	if current != nil {
+		getLogger().Info("general configuration reloaded", "file", configFilePath)
+	}
+	return nil
+}
+
+// ConfigVersion identifies the part of the current general configuration
+// that WAFs are built with: when it changes, the WAFs have to be created
+// again to use the new configuration.
+func ConfigVersion() string {
+	g := gConfig.Load()
+	if g == nil {
+		return ""
+	}
+	return g.version
+}
+
+// initialize initializes WACE WAF with the current logger if it is
+// not initialized yet, and returns the current general configuration.
+func initialize() (*generalConfig, error) {
+	reloadMu.Lock()
+	defer reloadMu.Unlock()
+
+	if g := gConfig.Load(); g != nil {
+		return g, nil
+	}
+
+	g, confData, err := readGeneralConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := applyGeneralConfig(nil, g, confData, currentLoggers.Load()); err != nil {
+		return nil, err
+	}
+	gConfig.Store(g)
+	return g, nil
+}
+
+// applyGeneralConfig applies the general configuration newGC, parsed from
+// confData, to the WACE core, which is initialized if current is nil. The
+// metrics and the loggers l are only set once the WACE core accepts it.
+func applyGeneralConfig(current, newGC *generalConfig, confData waceGeneralConfigFileData, l *loggers) error {
+	var err error
+	metrics := currentMetrics.Load()
+	if current == nil || current.otelURL != newGC.otelURL {
+		metrics, err = newMetrics(ctx, newGC.otelURL)
 		if err != nil {
-			return nil, fmt.Errorf("Error initializing metrics: %v", err)
+			return fmt.Errorf("Error initializing metrics: %v", err)
 		}
-		// Initialize WACE call, wich validate and test configs
-		err = wace.Init(metrics.provider, confData.ConfigFileData, getCoreLogger())
+	}
+
+	if current == nil {
+		// wace.Init validates the configuration and loads the plugins.
+		err = wace.Init(metrics.provider, confData.ConfigFileData, l.core)
 		if err != nil {
-			shutdownMetrics(metrics)
-			return nil, fmt.Errorf("Error WACE initialize failed: %v", err)
+			err = fmt.Errorf("Error WACE initialize failed: %v", err)
 		}
-		shutdownMetrics(currentMetrics.Swap(metrics))
-
-		// After plugins are validated, we get the default plugin values.
-		gConfig.setDefaultPlugins(confData)
-
-		gConfig.hash = dataHash(data)
-
 	} else {
-		newGC := new(generalConfig)
-		data, err := os.ReadFile(configFilePath)
+		err = wace.Reload(metrics.provider, confData.ConfigFileData, l.core)
 		if err != nil {
-			return nil, fmt.Errorf("Error loading general config: %v", err)
+			err = fmt.Errorf("Error WACE reload failed: %v", err)
 		}
-		h := dataHash(data)
-		// Check for changes on default config
-		if h != gConfig.hash {
-			confData, err := newGC.LoadConfig(data)
-			if err != nil {
-				return nil, fmt.Errorf("Error loading general config: %v", err)
-			}
-
-			// The metrics are only replaced once the WACE core accepts
-			// the new configuration.
-			metrics := currentMetrics.Load()
-			if gConfig.otelURL != newGC.otelURL {
-				metrics, err = newMetrics(ctx, newGC.otelURL)
-				if err != nil {
-					return nil, fmt.Errorf("Error initializing metrics: %v", err)
-				}
-			}
-
-			err = wace.Reload(metrics.provider, confData.ConfigFileData, getCoreLogger())
-			if err != nil {
-				if metrics != currentMetrics.Load() {
-					shutdownMetrics(metrics)
-				}
-				return nil, fmt.Errorf("Error WACE reload failed: %v", err)
-			}
-			if old := currentMetrics.Swap(metrics); old != metrics {
-				shutdownMetrics(old)
-			}
-
-			// After plugins are validated, we get the default plugin values.
-			newGC.setDefaultPlugins(confData)
-
-			gConfig = newGC
+	}
+	if err != nil {
+		if metrics != currentMetrics.Load() {
+			shutdownMetrics(metrics)
 		}
+		return err
+	}
+
+	if old := currentMetrics.Swap(metrics); old != metrics {
+		shutdownMetrics(old)
+	}
+	currentLoggers.Store(l)
+	return nil
+}
+
+// NewWAF creates a new WaceWAF object with the given configuration and the
+// current general configuration. If WACE WAF is not initialized yet, it
+// initializes it first with the logger set by SetLogger. It never reloads
+// the general configuration: Reload does.
+func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
+	g, err := initialize()
+	if err != nil {
+		return nil, err
 	}
 
 	wafConfigs, ok := config.(*WaceWAFConfig)
@@ -204,11 +268,11 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 			return nil, fmt.Errorf("Error applying waceAppConfig: %v", err)
 		}
 		if !wafConfigs.disableCRS {
-			configRules = wafConfigs.getConfigRules(gConfig.crsVersion)
+			configRules = wafConfigs.getConfigRules(g.crsVersion)
 		}
 	} else {
-		wafConfigs.LoadConfigFromGeneralConfig(*gConfig)
-		configRules = wafConfigs.getConfigRules(gConfig.crsVersion)
+		wafConfigs.LoadConfigFromGeneralConfig(*g)
+		configRules = wafConfigs.getConfigRules(g.crsVersion)
 	}
 
 	for _, rule := range configRules {
@@ -223,6 +287,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 
 	var exceptionsWaf coraza.WAF
 	if wafConfigs.exceptionsFilePath != "" {
+		wafConfigs.exceptionRuleIDs = g.ruleIdsForExceptions
 		wafConfigs.exceptionsConfig = wafConfigs.LoadExceptionsDirectives(wafConfigs.exceptionsFilePath, wafConfigs.waceModels)
 		exceptionsWaf, err = coraza.NewWAF(wafConfigs.exceptionsConfig)
 		if err != nil {
@@ -230,7 +295,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		}
 	}
 
-	return &WaceWAF{waf, exceptionsWaf, wafConfigs}, nil
+	return &WaceWAF{waf, exceptionsWaf, wafConfigs, g}, nil
 }
 
 // NewTransaction implements the NewTransaction interface provided by Coraza WAF to create a new WaceTransaction
@@ -822,7 +887,7 @@ func (t WaceTransaction) exceptionActiveModels(mt cs.ModelPluginType) ([]string,
 	if len(t.waf.waceWafConfig.waceModels[mt]) == 0 {
 		return nil, false
 	}
-	ruleID := gConfig.ruleIdsForExceptions[mt.String()]
+	ruleID := t.waf.general.ruleIdsForExceptions[mt.String()]
 	rules := t.exceptionTransaction.MatchedRules()
 	for i := len(rules) - 1; i >= 0; i-- {
 		if rules[i].Rule().ID() != ruleID {

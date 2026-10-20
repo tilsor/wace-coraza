@@ -108,9 +108,7 @@ func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) map[string]met
 }
 
 func TestTransactionRecordsMetrics(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig_block_transaction.yaml"
-	gConfig = nil
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig_block_transaction.yaml")
 
 	// The exceptions duration is only recorded with an exceptions file.
 	wafConf := NewWaceWAFConfig().WithExceptionsFromFile("testdata/config/waceexceptions.conf").
@@ -211,9 +209,7 @@ func phasesOf(t *testing.T, m metricdata.Metrics) []int64 {
 // TestExceptionsMetricOnlyWithExceptions verifies that the exceptions duration
 // is not recorded without an exceptions file.
 func TestExceptionsMetricOnlyWithExceptions(t *testing.T) {
-	configFilePath = "testdata/config/waceconfig.yaml"
-	gConfig = nil
-	defer resetWACE()
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
 
 	wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
 		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
