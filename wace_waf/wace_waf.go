@@ -36,7 +36,8 @@ type WaceWAF struct {
 	exceptionWAF  coraza.WAF
 	waceWafConfig *WaceWAFConfig
 	// general is the general configuration the WAF was created with.
-	general *generalConfig
+	general        *generalConfig
+	outdatedLogged atomic.Bool
 }
 
 // WaceTransaction implements the Transaction interface provided by Coraza WAF and adds the WACE functionality to it
@@ -295,13 +296,27 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 		}
 	}
 
-	return &WaceWAF{waf, exceptionsWaf, wafConfigs, g}, nil
+	return &WaceWAF{WAF: waf, exceptionWAF: exceptionsWaf, waceWafConfig: wafConfigs, general: g}, nil
+}
+
+// logIfOutdated logs, once per WAF, that the ConfigVersion the WAF was
+// created with is not the current one, so it has to be created again to
+// use the current general configuration.
+func (w *WaceWAF) logIfOutdated() {
+	g := gConfig.Load()
+	if g == nil || g == w.general || g.version == w.general.version {
+		return
+	}
+	if !w.outdatedLogged.Load() && w.outdatedLogged.CompareAndSwap(false, true) {
+		getLogger().Warn("WAF created with an outdated WACE general configuration: create it again to use the current one")
+	}
 }
 
 // NewTransaction implements the NewTransaction interface provided by Coraza WAF to create a new WaceTransaction
 // which implements the Transaction interface provided by Coraza WAF and adds the WACE functionality to it
 func (w *WaceWAF) NewTransaction() types.Transaction {
 	start := time.Now()
+	w.logIfOutdated()
 
 	CRSTransaction := w.WAF.NewTransaction()
 
@@ -321,6 +336,7 @@ func (w *WaceWAF) NewTransaction() types.Transaction {
 // which implements the Transaction interface provided by Coraza WAF and adds the WACE functionality to it
 func (w *WaceWAF) NewTransactionWithID(id string) types.Transaction {
 	start := time.Now()
+	w.logIfOutdated()
 
 	CRSTransaction := w.WAF.NewTransactionWithID(id)
 

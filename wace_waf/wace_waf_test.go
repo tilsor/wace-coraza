@@ -2,6 +2,7 @@ package waceWAF
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -324,6 +325,89 @@ func TestReloadWithoutDefaultDecision(t *testing.T) {
 	}
 	if _, err := configstore.Get(); err == nil {
 		t.Error("expected the WACE core not to get the rejected config")
+	}
+}
+
+// countingHandler counts the log records with the message msg.
+type countingHandler struct {
+	msg   string
+	count *atomic.Int64
+}
+
+func (h countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h countingHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == h.msg {
+		h.count.Add(1)
+	}
+	return nil
+}
+
+func (h countingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h countingHandler) WithGroup(string) slog.Handler { return h }
+
+// TestLogIfOutdated verifies that a WAF logs once that it is outdated after
+// a Reload that changes how WAFs are built, and does not log after one that
+// only changes a plugin parameter.
+func TestLogIfOutdated(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig_all_models.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		old, new string
+		logs     int64
+	}{
+		{
+			name: "decision plugin parameter",
+			old:  `threshold: "0.5"`,
+			new:  `threshold: "0.6"`,
+			logs: 0,
+		},
+		{
+			name: "early blocking",
+			old:  "early_blocking: true",
+			new:  "early_blocking: false",
+			logs: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "waceconfig.yaml")
+			writeGeneralConfig(t, path, data)
+			reloadWACE(t, path)
+			t.Cleanup(func() { SetLogger(nil) })
+
+			waf, err := NewWAF(NewWaceWAFConfig().WithWaceAppConfig(WaceAppConfigFileData{
+				ModelIds:    []string{"trivialRequestHeaders"},
+				DecisionIds: []string{"weighted_sum"},
+				DisableCRS:  true,
+			}))
+			if err != nil {
+				t.Fatalf("Error creating WAF: %v", err)
+			}
+
+			changed := strings.Replace(string(data), tt.old, tt.new, 1)
+			if changed == string(data) {
+				t.Fatalf("the general config testdata does not have %q", tt.old)
+			}
+			writeGeneralConfig(t, path, []byte(changed))
+			count := new(atomic.Int64)
+			h := countingHandler{msg: "WAF created with an outdated WACE general configuration: create it again to use the current one", count: count}
+			if err := Reload(slog.New(h)); err != nil {
+				t.Fatalf("Error reloading WACE: %v", err)
+			}
+
+			waf.NewTransaction().Close()
+			waf.NewTransactionWithID("outdated").Close()
+			if got := count.Load(); got != tt.logs {
+				t.Errorf("expected %d outdated WAF logs, got %d", tt.logs, got)
+			}
+		})
 	}
 }
 
