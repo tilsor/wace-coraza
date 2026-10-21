@@ -41,6 +41,7 @@ decision_plugins:
     params:
       threshold: "0.5"
 
+default_decision: "weighted_sum"
 crs_version: "4.4.0-dev"
 early_blocking: true
 

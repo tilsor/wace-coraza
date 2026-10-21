@@ -33,6 +33,10 @@ decision_plugins:
       max_samples: 10
       result_file_path: "/tmp/training_results.ndjson"
 
+# The non-training decision plugin used by the applications without
+# decision_ids. Required.
+default_decision: "weighted_sum"
+
 # OTLP gRPC receiver of an OpenTelemetry Collector (host:port). Without it,
 # no metrics are recorded.
 # otel_url: "localhost:4317"

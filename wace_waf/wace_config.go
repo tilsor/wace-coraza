@@ -71,6 +71,7 @@ type waceGeneralConfigFileData struct {
 	OtelURL           string         `yaml:"otel_url"`
 	ExceptionIDs      map[string]int `yaml:"exception_ids"`
 	FailClosed        bool           `yaml:"fail_closed"`
+	DefaultDecision   string         `yaml:"default_decision"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
@@ -275,14 +276,19 @@ func loadConfig(configFilePath string) (WaceAppConfigFileData, error) {
 }
 
 // loadWaceAppConfig applies the WACE App configuration to the WAF config and
-// validates its models and decision plugins against the general configuration
-func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData) error {
+// validates its models and decision plugins against the general configuration.
+// defaultDecision is used when the app config has no decision_ids.
+func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData, defaultDecision string) error {
 	w.disableCRS = conf.DisableCRS
 	w.earlyBlocking = conf.EarlyBlocking
 	w.blocking = conf.Blocking
 
 	var err error
-	w.waceModels, w.waceDecisionIds, err = newWacePluginsConfig(conf.ModelIds, conf.DecisionIds)
+	decisionIds := conf.DecisionIds
+	if len(decisionIds) == 0 {
+		decisionIds = []string{defaultDecision}
+	}
+	w.waceModels, w.waceDecisionIds, err = newWacePluginsConfig(conf.ModelIds, decisionIds)
 	if err != nil {
 		return err
 	}
@@ -292,7 +298,7 @@ func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData) error {
 
 // LoadConfigFromGeneralConfig loads the application configuration from the general configuration
 // it is used when the application configuration is not provided in a file.
-// It uses the first decision plugin and uses all the models declared in the general configuration
+// It uses the default decision plugin and all the non-training models declared in the general configuration
 func (w *WaceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.earlyBlocking = g.earlyBlocking
 	w.blocking = g.blocking
@@ -300,8 +306,9 @@ func (w *WaceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.waceDecisionIds = []string{g.waceDecision}
 }
 
-// getDefaultPlugins gets the non-training model plugin IDs and the first
-// non-training decision plugin ID of the general configuration
+// getDefaultPlugins gets the non-training model plugin IDs and the
+// default_decision of the general configuration, which must be a declared
+// non-training decision plugin
 func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (WaceModels, string, error) {
 	models := make(WaceModels)
 	for _, model := range loadedConf.ModelPlugins {
@@ -316,13 +323,21 @@ func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (WaceModels, string
 		models[pluginType] = append(models[pluginType], model.ID)
 	}
 
+	id := loadedConf.DefaultDecision
+	if id == "" {
+		return WaceModels{}, "", fmt.Errorf("default_decision is required")
+	}
 	for _, dp := range loadedConf.DecisionPlugins {
-		if !dp.Training {
-			return models, dp.ID, nil
+		if dp.ID != id {
+			continue
 		}
+		if dp.Training {
+			return WaceModels{}, "", fmt.Errorf("default_decision %s is a training decision plugin", id)
+		}
+		return models, id, nil
 	}
 
-	return models, "", nil
+	return WaceModels{}, "", fmt.Errorf("default_decision %s is not a declared decision plugin", id)
 }
 
 func (g *generalConfig) setDefaultPlugins(loadedConf waceGeneralConfigFileData) error {
@@ -332,11 +347,6 @@ func (g *generalConfig) setDefaultPlugins(loadedConf waceGeneralConfigFileData) 
 	}
 
 	g.waceModels = models
-
-	if decision == "" {
-		return fmt.Errorf("There are no decision plugins available")
-	}
-
 	g.waceDecision = decision
 
 	return nil

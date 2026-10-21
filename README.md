@@ -45,6 +45,8 @@ Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF
   - params: Contains parameters for decision-making logic.
     - threshold (String): minimum threshold score to apply the decision plugin’s result.
 
+- default_decision (String, required): the ID of the decision plugin used by the applications without a waceappconfig.yaml and by those whose waceappconfig.yaml has no `decision_ids`. It must be a non-training plugin declared in `decision_plugins`; otherwise the configuration is rejected when it is loaded. It can be changed by a reload.
+
 **Network and Options**
 
 - nats_url (String): URL for the NATS server, which handles messaging between components. Default format is hostname:port.
@@ -72,7 +74,7 @@ Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF
 
 ### File: <app>waceappconfig.yaml
 - model_ids (List): a list of model plugin IDs to be applied in this application. Each ID SHOULD match a model plugin defined in the main configuration.
-- decision_ids (List): the IDs of the decision plugins to use. Each ID should correspond to one in the `decision_plugins` section of the main configuration. Exactly one must be a non-training decision plugin.
+- decision_ids (List): the IDs of the decision plugins to use. Each ID should correspond to one in the `decision_plugins` section of the main configuration. Exactly one must be a non-training decision plugin: a list with only training plugins is rejected. When it is empty or missing, the general config's `default_decision` is used.
 - early_blocking (Boolean): overrides the general config's early_blocking for this application.
 - disable_crs (Boolean): when true, skips injecting the OWASP CRS-specific directives (CRS blocking-rule neutralization and anomaly-score reporting rules) for this application, so the CRS ruleset does not need to be loaded at all. Custom SecLang rules (e.g. virtual patches) are unaffected and still apply.
 - blocking (Boolean): overrides the general config's blocking for this application.

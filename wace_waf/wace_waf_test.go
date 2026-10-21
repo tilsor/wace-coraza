@@ -351,26 +351,55 @@ func TestReloadRejectedConfig(t *testing.T) {
 }
 
 // TestReloadWithoutDefaultDecision verifies that a general config without
-// a non-training decision plugin is rejected before the WACE core gets it,
-// so a later Reload can still initialize it.
+// a valid default_decision is rejected before the WACE core gets it, so a
+// later Reload can still initialize it.
 func TestReloadWithoutDefaultDecision(t *testing.T) {
 	data, err := os.ReadFile("testdata/config/waceconfig_all_models.yaml")
 	if err != nil {
 		t.Fatalf("Error reading general config: %v", err)
 	}
-	training := strings.Replace(string(data), "  - id: \"weighted_sum\"\n", "  - id: \"weighted_sum\"\n    training: true\n", 1)
-	if training == string(data) {
-		t.Fatal("the general config testdata does not have the expected decision plugin")
+
+	tests := []struct {
+		name, old, new, errContains string
+	}{
+		{
+			name:        "missing",
+			old:         "default_decision: \"weighted_sum\"\n",
+			new:         "",
+			errContains: "default_decision is required",
+		},
+		{
+			name:        "unknown",
+			old:         "default_decision: \"weighted_sum\"",
+			new:         "default_decision: \"nonexistent\"",
+			errContains: "default_decision nonexistent is not a declared decision plugin",
+		},
+		{
+			name:        "training",
+			old:         "  - id: \"weighted_sum\"\n",
+			new:         "  - id: \"weighted_sum\"\n    training: true\n",
+			errContains: "default_decision weighted_sum is a training decision plugin",
+		},
 	}
 
-	resetWACE()
-	t.Cleanup(resetWACE)
-	writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(training))
-	if err := Reload(nil); err == nil {
-		t.Fatal("expected the general config to be rejected")
-	}
-	if _, err := configstore.Get(); err == nil {
-		t.Error("expected the WACE core not to get the rejected config")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := strings.Replace(string(data), tt.old, tt.new, 1)
+			if changed == string(data) {
+				t.Fatalf("the general config testdata does not have %q", tt.old)
+			}
+
+			resetWACE()
+			t.Cleanup(resetWACE)
+			writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(changed))
+			err := Reload(nil)
+			if err == nil || !strings.Contains(err.Error(), tt.errContains) {
+				t.Fatalf("expected an error containing %q, got %v", tt.errContains, err)
+			}
+			if _, err := configstore.Get(); err == nil {
+				t.Error("expected the WACE core not to get the rejected config")
+			}
+		})
 	}
 }
 
@@ -1470,6 +1499,7 @@ decision_plugins:
     waf_weight: 0.5
     params:
       threshold: "0.5"
+default_decision: "weighted_sum"
 crs_version: "4.4.0-dev"
 exception_ids:
   RequestHeaders: 100
