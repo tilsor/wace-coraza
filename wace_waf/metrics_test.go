@@ -67,9 +67,13 @@ func TestNewResourceServiceNameFromEnv(t *testing.T) {
 
 func TestNewMetricsMalformedResourceAttributes(t *testing.T) {
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "malformed")
+	_, logs := captureLogs(t)
 	m, err := newMetrics(context.Background(), "localhost:4317")
 	if err != nil {
 		t.Fatalf("a malformed OTEL_RESOURCE_ATTRIBUTES should not fail, got: %v", err)
+	}
+	if !strings.Contains(logs.String(), "error reading the metrics resource attributes") {
+		t.Errorf("expected the malformed resource attributes to be logged, got logs:\n%s", logs)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
