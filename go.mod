@@ -1,10 +1,9 @@
 module github.com/tilsor/wace-coraza
 
-go 1.26.9
-
-require github.com/corazawaf/coraza/v3 v3.7.0
+go 1.26.10
 
 require (
+	github.com/corazawaf/coraza/v3 v3.8.1
 	github.com/magefile/mage v1.17.2
 	github.com/tilsor/ModSecIntl_wace_lib v1.0.3-0.20261009183816-55db53645ed0
 	go.opentelemetry.io/otel v1.47.0
@@ -18,7 +17,7 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/corazawaf/libinjection-go v0.3.2 // indirect
+	github.com/corazawaf/libinjection-go v0.3.3 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260430182902-b6187a392ed4 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
