@@ -7,31 +7,24 @@ model_plugins:
   - id: "trivialRequestHeaders"
     plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivialRequestBody"
     plugin_type: RequestBody
     path: "testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivialAllRequest"
     plugin_type: AllRequest
     path: "testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivialResponseHeaders"
     plugin_type: ResponseHeaders
     path: "testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivialResponseBody"
     plugin_type: ResponseBody
     path: "testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivialAllResponse"
     plugin_type: AllResponse
     path: "testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivialEverything"
     plugin_type: Everything
     path: "testdata/plugins/trivial.so"
-    mode: sync
 
 decision_plugins:
   - id: "weighted_sum"

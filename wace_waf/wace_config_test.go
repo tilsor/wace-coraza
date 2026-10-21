@@ -202,6 +202,49 @@ func TestGeneralConfigLoadConfig(t *testing.T) {
 	}
 }
 
+// TestLoadConfigUnknownField verifies that the general and the application
+// configurations are rejected when they have a field that WACE does not know,
+// instead of ignoring it.
+func TestLoadConfigUnknownField(t *testing.T) {
+	general := []byte(`
+model_plugins:
+  - id: "trivial"
+    plugin_type: RequestHeaders
+    path: "testdata/plugins/trivial.so"
+    mode: async
+decision_plugins:
+  - id: "weighted_sum"
+    path: "testdata/plugins/weighted_sum.so"`)
+	if _, err := new(generalConfig).LoadConfig(general); err == nil || !strings.Contains(err.Error(), "field mode not found") {
+		t.Errorf("expected the general config to be rejected for the unknown field mode, got %v", err)
+	}
+
+	app := []byte(`
+model_ids: ["trivial"]
+decision_ids: ["weighted_sum"]
+decision_id: "weighted_sum"`)
+	if _, err := parseWaceConfig(app); err == nil || !strings.Contains(err.Error(), "field decision_id not found") {
+		t.Errorf("expected the app config to be rejected for the unknown field decision_id, got %v", err)
+	}
+}
+
+// TestLoadConfigEmpty verifies that empty configurations are parsed as
+// empty, so they fail on the missing plugins instead of on the parsing.
+func TestLoadConfigEmpty(t *testing.T) {
+	_, err := new(generalConfig).LoadConfig([]byte(""))
+	if err != nil {
+		t.Errorf("expected an empty general config to be parsed, got %v", err)
+	}
+
+	conf, err := parseWaceConfig([]byte("# no fields\n"))
+	if err != nil {
+		t.Errorf("expected an empty app config to be parsed, got %v", err)
+	}
+	if !reflect.DeepEqual(conf, WaceAppConfigFileData{}) {
+		t.Errorf("expected an empty app config, got %+v", conf)
+	}
+}
+
 // TestExceptionRuleIDs verifies that the configured exception rule ids are
 // merged over the defaults, and that unknown types, non-positive ids and
 // repeated ids are rejected.
@@ -676,7 +719,6 @@ model_plugins:
   - id: "model_training"
     plugin_type: RequestHeaders
     path: "testdata/plugins/trivial.so"
-    weight: 0.25
     training: true
     training_data:
       max_samples: 50
@@ -684,9 +726,8 @@ model_plugins:
 decision_plugins:
   - id: "weighted_sum"
     path: "testdata/plugins/weighted_sum.so"
-options:
-  crs_version: "4.4.0-dev"
-ruleidsforexceptions:
+crs_version: "4.4.0-dev"
+exception_ids:
   RequestHeaders: 100`)
 
 	confData, err := gCfg.LoadConfig(config)

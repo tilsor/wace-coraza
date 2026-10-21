@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,38 @@ import (
 func resetWACE() {
 	gConfig.Store(nil)
 	configstore.Clean()
+}
+
+// logBuffer collects the logs written by the WACE WAF and WACE core
+// loggers, which may write from several goroutines.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogs replaces the logger with one that writes to the returned
+// buffer, and restores the default logger when the test ends. The WACE
+// core only takes the new logger on the next Reload that applies a
+// configuration.
+func captureLogs(tb testing.TB) (*slog.Logger, *logBuffer) {
+	tb.Helper()
+	b := &logBuffer{}
+	l := slog.New(slog.NewTextHandler(b, nil))
+	SetLogger(l)
+	tb.Cleanup(func() { SetLogger(nil) })
+	return l, b
 }
 
 // reloadWACE initializes WACE from scratch with the general config at
@@ -261,6 +294,12 @@ func TestReloadRejectedConfig(t *testing.T) {
 			name: "invalid exception ids",
 			old:  "  Everything: 700\n",
 			new:  "  Everything: 700\n  NotAType: 1\n",
+		},
+		{
+			name:        "unknown field",
+			old:         "early_blocking: true\n",
+			new:         "early_blocking: true\nearlyblocking: true\n",
+			errContains: "field earlyblocking not found",
 		},
 		{
 			name: "nats_url changed",
@@ -1528,6 +1567,8 @@ func (tx closeRecorderTx) Close() error {
 // and the main transactions, even if closing the first one fails, and returns
 // the errors of both.
 func TestCloseClosesBothTransactions(t *testing.T) {
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
+	wace.InitTransaction("close-test")
 	var closed []string
 	errExceptions := errors.New("exceptions error")
 	errMain := errors.New("main error")
@@ -1549,6 +1590,8 @@ func TestCloseClosesBothTransactions(t *testing.T) {
 // TestCloseWithoutExceptions verifies that Close only closes the main
 // transaction when there is no exceptions transaction.
 func TestCloseWithoutExceptions(t *testing.T) {
+	reloadWACE(t, "testdata/config/waceconfig.yaml")
+	wace.InitTransaction("close-test")
 	var closed []string
 	tx := WaceTransaction{
 		Transaction: closeRecorderTx{name: "main", closed: &closed},
@@ -1669,7 +1712,8 @@ func TestCheckTransactionFailClosed(t *testing.T) {
 			resetWACE()
 			t.Cleanup(resetWACE)
 			writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(conf))
-			if err := Reload(nil); err != nil {
+			l, logs := captureLogs(t)
+			if err := Reload(l); err != nil {
 				t.Fatalf("Error initializing WACE: %v", err)
 			}
 
@@ -1696,6 +1740,9 @@ func TestCheckTransactionFailClosed(t *testing.T) {
 			}
 			if tt.wantBlock && i.Status != 403 {
 				t.Errorf("expected status 403, got %d", i.Status)
+			}
+			if tt.blocking && !strings.Contains(logs.String(), "error checking the transaction by WACE") {
+				t.Errorf("expected the failed decision to be logged, got logs:\n%s", logs)
 			}
 		})
 	}

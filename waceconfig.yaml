@@ -7,11 +7,9 @@ model_plugins:
   - id: "trivial"
     plugin_type: RequestHeaders
     path: "wace_waf/testdata/plugins/trivial.so"
-    mode: sync
   - id: "trivial2"
     plugin_type: RequestBody
     path: "wace_waf/testdata/plugins/trivial2.so"
-    mode: sync
     
 decision_plugins:
   - id: "weighted_sum"
