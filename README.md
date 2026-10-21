@@ -45,6 +45,7 @@ Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF
 - crs_version (String): version of the OWASP CRS in use.
 - early_blocking (Boolean): enables or disables early blocking of requests.
 - blocking (Boolean): enables or disables denying transactions based on the WACE decision plugin's result. When false, transactions are still analyzed and scored, but never denied. If a per-app waceappconfig.yaml is used, its own `blocking` value takes priority over this one.
+- fail_closed (Boolean, optional, default false): when true, transactions are denied if the WACE decision plugin cannot decide (e.g. it fails or times out). When false, they are let through. It only has effect when `blocking` is enabled.
 
 **Rule IDs for Exceptions**
 

@@ -763,7 +763,9 @@ func (t WaceTransaction) Close() error {
 }
 
 // checkTransaction asks the WACE decision plugin whether to block the
-// transaction after phase, and returns the interruption to apply, or nil.
+// transaction after phase, and returns the interruption to apply, or nil. If
+// there is no decision, the transaction is blocked only with fail_closed.
+// Either way, it is only blocked if blocking is enabled.
 func (t WaceTransaction) checkTransaction(phase int) *types.Interruption {
 	wafScores, ok := parseScoreParams(t.MatchedRules(), strconv.Itoa(phase))
 	if !ok {
@@ -777,21 +779,21 @@ func (t WaceTransaction) checkTransaction(phase int) *types.Interruption {
 	block, found, err := wace.CheckTransaction(t.Transaction.ID(), decisionIds, wafParams)
 
 	logger := getLogger().With(waceapi.LogKeyTxID, t.Transaction.ID(), "phase", phase)
-	if err != nil {
+	switch {
+	case err != nil:
 		logger.Error("error checking the transaction by WACE", "decision.ids", decisionIds, "error", err)
-		return nil
-	}
-	if !found {
+		block = t.waf.general.failClosed
+	case !found:
 		// NewWAF rejects a WAF without a non-training decision plugin, so
 		// the general configuration changed after the WAF was created.
 		logger.Error("non-training decision plugin not found", "decision.ids", decisionIds)
-		return nil
+		block = t.waf.general.failClosed
 	}
 	if !block || !t.waf.waceWafConfig.blocking {
 		return nil
 	}
 
-	logger.Debug("transaction blocked")
+	logger.Debug("transaction blocked", "decision.failed", err != nil || !found)
 	t.httpPayload.ResponseCode = http.StatusForbidden
 	getMetrics().recordBlocked(ctx, phase)
 	return &types.Interruption{Action: "deny", Status: 403}

@@ -34,6 +34,9 @@ type generalConfig struct {
 	// version identifies the part of the configuration that WAFs are
 	// built with. It is returned by ConfigVersion.
 	version string
+	// failClosed makes WACE WAF block the transactions whose decision
+	// fails, instead of letting them through.
+	failClosed bool
 }
 
 // WaceWAFConfig implements the WAFConfig interface and adds the specific configuration for the WaceWAF.
@@ -65,6 +68,7 @@ type waceGeneralConfigFileData struct {
 	Blocking          bool           `yaml:"blocking"`
 	OtelURL           string         `yaml:"otel_url"`
 	ExceptionIDs      map[string]int `yaml:"exception_ids"`
+	FailClosed        bool           `yaml:"fail_closed"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
@@ -140,6 +144,7 @@ func jsonHash(v any) (string, error) {
 type wafVersionData struct {
 	EarlyBlocking   bool
 	Blocking        bool
+	FailClosed      bool
 	DefaultDecision string
 	ModelPlugins    map[string]wafVersionModel
 	DecisionPlugins map[string]bool
@@ -183,6 +188,7 @@ func readGeneralConfig() (*generalConfig, waceGeneralConfigFileData, error) {
 	version := wafVersionData{
 		EarlyBlocking:   g.earlyBlocking,
 		Blocking:        g.blocking,
+		FailClosed:      g.failClosed,
 		DefaultDecision: g.waceDecision,
 		ModelPlugins:    map[string]wafVersionModel{},
 		DecisionPlugins: map[string]bool{},
@@ -227,6 +233,7 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	g.crsVersion = confData.CRSVersion
 	g.blocking = confData.Blocking
 	g.otelURL = confData.OtelURL
+	g.failClosed = confData.FailClosed
 	g.ruleIdsForExceptions, err = exceptionRuleIDs(confData.ExceptionIDs)
 	if err != nil {
 		return waceGeneralConfigFileData{}, err
