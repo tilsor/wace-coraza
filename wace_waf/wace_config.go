@@ -341,18 +341,25 @@ func newWacePluginsConfig(modelsIds []string, decisionIds []string) (WaceModels,
 		}
 	}
 
+	// The WACE core takes exactly one non-training decision plugin: it
+	// fails every check with none or with more than one.
 	checkedDecisionIds := []string{}
-	activeFound := false
+	activeIds := []string{}
 	for _, id := range decisionIds {
 		if dp, ok := config.DecisionPlugins[id]; ok {
 			checkedDecisionIds = append(checkedDecisionIds, id)
-			activeFound = activeFound || !dp.Training
+			if !dp.Training {
+				activeIds = append(activeIds, id)
+			}
 		} else {
 			err = errors.Join(err, fmt.Errorf("Unknown decision: %s", id))
 		}
 	}
-	if !activeFound {
+	switch {
+	case len(activeIds) == 0:
 		err = errors.Join(err, fmt.Errorf("Non-training decision plugin not found"))
+	case len(activeIds) > 1:
+		err = errors.Join(err, fmt.Errorf("Multiple non-training decision plugins: %s", activeIds))
 	}
 	return models, checkedDecisionIds, err
 }
