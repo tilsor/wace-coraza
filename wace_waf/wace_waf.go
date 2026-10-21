@@ -266,7 +266,7 @@ func NewWAF(config coraza.WAFConfig) (*WaceWAF, error) {
 			wafConfigs.waceConfigRaw = &conf
 		}
 
-		err := wafConfigs.loadWaceAppConfig(*wafConfigs.waceConfigRaw)
+		err := wafConfigs.loadWaceAppConfig(*wafConfigs.waceConfigRaw, g.waceDecision)
 		if err != nil {
 			return nil, fmt.Errorf("Error applying waceAppConfig: %v", err)
 		}

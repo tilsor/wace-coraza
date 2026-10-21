@@ -348,7 +348,7 @@ func TestWaceWAFConfigLoadConfig(t *testing.T) {
 	}
 
 	wConfig := NewWaceWAFConfig()
-	err = wConfig.loadWaceAppConfig(appConfig)
+	err = wConfig.loadWaceAppConfig(appConfig, "weighted_sum")
 	if err != nil {
 		t.Fatalf("Error applying waceappconfig: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestWaceWAFConfigLoadConfigNewFields(t *testing.T) {
 	}
 
 	wConfig := NewWaceWAFConfig()
-	err = wConfig.loadWaceAppConfig(appConfig)
+	err = wConfig.loadWaceAppConfig(appConfig, "weighted_sum")
 	if err != nil {
 		t.Fatalf("Error applying waceappconfig: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestNewWAFWithWaceAppConfigMultipleDecisions(t *testing.T) {
 		t.Fatalf("Error reading general config: %v", err)
 	}
 	second := "  - id: \"weighted_sum2\"\n    path: \"testdata/plugins/weighted_sum.so\"\n    waf_weight: 0.5\n\n"
-	multiple := strings.Replace(string(data), "crs_version:", second+"crs_version:", 1)
+	multiple := strings.Replace(string(data), "default_decision:", second+"default_decision:", 1)
 
 	resetWACE()
 	t.Cleanup(resetWACE)
@@ -658,6 +658,65 @@ func TestNewWAFWithWaceAppConfigMultipleDecisions(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Multiple non-training decision plugins") {
 		t.Errorf("expected a multiple decision plugins error, got: %v", err)
+	}
+}
+
+// TestNewWAFDefaultDecision verifies that the default_decision of the
+// general config, and not the first non-training decision plugin, is used
+// by the WAFs without an app config and by the app configs without
+// decision_ids, and that an app config with only training decision plugins
+// is rejected instead of getting the default.
+func TestNewWAFDefaultDecision(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+	second := "  - id: \"weighted_sum2\"\n    path: \"testdata/plugins/weighted_sum.so\"\n    waf_weight: 0.5\n" +
+		"  - id: \"weighted_sum_training\"\n    path: \"testdata/plugins/weighted_sum_training.so\"\n    waf_weight: 0.5\n" +
+		"    training: true\n    training_data:\n      max_samples: 10\n\n"
+	conf := strings.Replace(string(data), "default_decision: \"weighted_sum\"", second+"default_decision: \"weighted_sum2\"", 1)
+	if conf == string(data) {
+		t.Fatal("the general config testdata does not have the expected default_decision")
+	}
+
+	resetWACE()
+	t.Cleanup(resetWACE)
+	writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(conf))
+	if err := Reload(nil); err != nil {
+		t.Fatalf("Error initializing WACE: %v", err)
+	}
+
+	expected := []string{"weighted_sum2"}
+	waf, err := NewWAF(NewWaceWAFConfig().
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf"))
+	if err != nil {
+		t.Fatalf("Error creating WAF without app config: %v", err)
+	}
+	if !reflect.DeepEqual(waf.waceWafConfig.waceDecisionIds, expected) {
+		t.Errorf("without app config, expected decision ids %v, got %v", expected, waf.waceWafConfig.waceDecisionIds)
+	}
+
+	waf, err = NewWAF(NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:   []string{"trivial"},
+			DisableCRS: true,
+		}))
+	if err != nil {
+		t.Fatalf("Error creating WAF with an app config without decision_ids: %v", err)
+	}
+	if !reflect.DeepEqual(waf.waceWafConfig.waceDecisionIds, expected) {
+		t.Errorf("with an app config without decision_ids, expected decision ids %v, got %v", expected, waf.waceWafConfig.waceDecisionIds)
+	}
+
+	_, err = NewWAF(NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:    []string{"trivial"},
+			DecisionIds: []string{"weighted_sum_training"},
+			DisableCRS:  true,
+		}))
+	if err == nil || !strings.Contains(err.Error(), "Non-training decision plugin not found") {
+		t.Errorf("expected an app config with only training decision plugins to be rejected, got: %v", err)
 	}
 }
 
