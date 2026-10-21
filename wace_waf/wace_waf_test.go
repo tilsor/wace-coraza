@@ -296,6 +296,12 @@ func TestReloadRejectedConfig(t *testing.T) {
 			new:  "  Everything: 700\n  NotAType: 1\n",
 		},
 		{
+			name:        "unknown field",
+			old:         "early_blocking: true\n",
+			new:         "early_blocking: true\nearlyblocking: true\n",
+			errContains: "field earlyblocking not found",
+		},
+		{
 			name: "nats_url changed",
 			old:  "early_blocking: true\n",
 			new:  "early_blocking: true\nnats_url: \"nats://localhost:4222\"\n",

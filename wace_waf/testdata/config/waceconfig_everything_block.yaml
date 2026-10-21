@@ -7,7 +7,6 @@ model_plugins:
   - id: "trivialEverything"
     plugin_type: Everything
     path: "testdata/plugins/trivial2.so"
-    mode: sync
 
 decision_plugins:
   - id: "weighted_sum"

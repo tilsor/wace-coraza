@@ -1,10 +1,12 @@
 package waceWAF
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -225,7 +227,7 @@ func checkFixedFields(current, next *generalConfig) error {
 func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, error) {
 	var confData waceGeneralConfigFileData
 
-	err := yaml.Unmarshal(config, &confData)
+	err := decodeStrict(config, &confData)
 	if err != nil {
 		return waceGeneralConfigFileData{}, err
 	}
@@ -242,10 +244,21 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	return confData, nil
 }
 
+// decodeStrict decodes the YAML data into v, and returns an error if the
+// data has a field that v does not have. Empty data leaves v unchanged.
+func decodeStrict(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
 // parseWaceConfig parses the WACE App configuration from YAML data
 func parseWaceConfig(data []byte) (WaceAppConfigFileData, error) {
 	var conf WaceAppConfigFileData
-	err := yaml.Unmarshal(data, &conf)
+	err := decodeStrict(data, &conf)
 	return conf, err
 }
 
