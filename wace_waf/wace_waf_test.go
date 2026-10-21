@@ -1151,6 +1151,140 @@ func TestWithExceptionsFromFile(t *testing.T) {
 	}
 }
 
+// TestProcessConnectionPropagatesToExceptions verifies that ProcessConnection
+// forwards the connection data to the exceptions transaction. The exceptions
+// file disables trivialRequestHeaders only for a specific client address, which
+// is available to the exceptions WAF solely through ProcessConnection: without
+// that propagation REMOTE_ADDR would be empty and the model would stay active.
+func TestProcessConnectionPropagatesToExceptions(t *testing.T) {
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
+
+	exceptionsPath := filepath.Join(t.TempDir(), "remote_addr_exceptions.conf")
+	exceptions := `SecRule REMOTE_ADDR "@streq 1.2.3.4" "id:10, phase:1, nolog, pass, t:none, setvar:tx.trivialRequestHeaders=false"`
+	if err := os.WriteFile(exceptionsPath, []byte(exceptions), 0o600); err != nil {
+		t.Fatalf("Error writing exceptions file: %v", err)
+	}
+
+	wafConf := NewWaceWAFConfig().
+		WithExceptionsFromFile(exceptionsPath).
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		clientAddr   string
+		expectActive bool
+	}{
+		{name: "matching client disables model", clientAddr: "1.2.3.4", expectActive: false},
+		{name: "other client keeps model active", clientAddr: "5.6.7.8", expectActive: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := waf.NewTransaction()
+			defer tx.Close()
+			defer tx.ProcessLogging()
+
+			tx.ProcessConnection(tt.clientAddr, 12345, "127.0.0.1", 80)
+			tx.ProcessURI("http://localhost:8090/", "GET", "HTTP/1.1")
+			tx.AddRequestHeader("Host", "localhost")
+			if i := tx.ProcessRequestHeaders(); i != nil {
+				t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+			}
+
+			activeModels, found := tx.(WaceTransaction).exceptionActiveModels(configstore.RequestHeaders)
+			if !found {
+				t.Fatal("expected the exceptions WAF to match the RequestHeaders exceptions rule")
+			}
+			isActive := reflect.DeepEqual(activeModels, []string{"trivialRequestHeaders"})
+			if isActive != tt.expectActive {
+				t.Errorf("client %s: expected model active=%v, got active models %q", tt.clientAddr, tt.expectActive, activeModels)
+			}
+		})
+	}
+}
+
+// TestResponseBodyExceptionWithMimeType verifies end to end that an exception
+// rule inspecting RESPONSE_BODY disables a response-body model when the
+// exceptions file declares SecResponseBodyMimeType. needsResponseBody must read
+// the response body and forward it to the exceptions transaction, and the
+// exceptions WAF must populate RESPONSE_BODY because the mime type was declared
+// in the exceptions file itself (it inherits none from the main config).
+func TestResponseBodyExceptionWithMimeType(t *testing.T) {
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
+
+	exceptionsPath := filepath.Join(t.TempDir(), "response_body_exceptions.conf")
+	exceptions := "SecResponseBodyMimeType text/plain\n" +
+		`SecRule RESPONSE_BODY "@contains blockme" "id:410, phase:4, nolog, pass, t:none, setvar:tx.trivialResponseBody=false"` + "\n"
+	if err := os.WriteFile(exceptionsPath, []byte(exceptions), 0o600); err != nil {
+		t.Fatalf("Error writing exceptions file: %v", err)
+	}
+
+	wafConf := NewWaceWAFConfig().
+		WithExceptionsFromFile(exceptionsPath).
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		// The main WAF must buffer the response body so there is a body to
+		// forward to the exceptions transaction.
+		WithDirectives("SecResponseBodyMimeType text/plain").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		responseBody string
+		expectActive bool
+	}{
+		{name: "matching body disables model", responseBody: "please blockme now", expectActive: false},
+		{name: "non-matching body keeps model active", responseBody: "nothing to see here", expectActive: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := waf.NewTransaction()
+			defer tx.Close()
+			defer tx.ProcessLogging()
+
+			tx.ProcessURI("http://localhost:8090/", "GET", "HTTP/1.1")
+			tx.AddRequestHeader("Host", "localhost")
+			if i := tx.ProcessRequestHeaders(); i != nil {
+				t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+			}
+
+			tx.AddResponseHeader("Content-Type", "text/plain")
+			if i := tx.ProcessResponseHeaders(200, "HTTP/1.1"); i != nil {
+				t.Fatalf("response headers should not be blocked, got interruption: %v", i)
+			}
+
+			if _, _, err := tx.WriteResponseBody([]byte(tt.responseBody)); err != nil {
+				t.Fatalf("Error writing response body: %v", err)
+			}
+			if _, err := tx.ProcessResponseBody(); err != nil {
+				t.Fatalf("Error processing response body: %v", err)
+			}
+
+			activeModels, found := tx.(WaceTransaction).exceptionActiveModels(configstore.ResponseBody)
+			if !found {
+				t.Fatal("expected the exceptions WAF to match the ResponseBody exceptions rule")
+			}
+			isActive := reflect.DeepEqual(activeModels, []string{"trivialResponseBody"})
+			if isActive != tt.expectActive {
+				t.Errorf("body %q: expected model active=%v, got active models %q", tt.responseBody, tt.expectActive, activeModels)
+			}
+		})
+	}
+}
+
 // TestWithExceptionsFromFileNotFound verifies that a missing exceptions file
 // makes WAF creation fail with an error that names the file.
 func TestWithExceptionsFromFileNotFound(t *testing.T) {
