@@ -425,8 +425,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	start := time.Now()
 	// The models get a copy: ResponseCode is written below while they run.
 	payload := *t.httpPayload
-	t.coordinator.Add(1)
-	go func() {
+	t.runAnalysis(func() {
 		getLogger().Debug("processing request headers by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
 		var activeModels []string
@@ -443,8 +442,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 		if err != nil {
 			getLogger().Error("error processing request headers by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
-		t.coordinator.Done()
-	}()
+	})
 
 	interruption := t.Transaction.ProcessRequestHeaders()
 	if interruption != nil {
@@ -513,8 +511,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 
 	// The models get a copy: ResponseCode is written below while they run.
 	payload := *t.httpPayload
-	t.coordinator.Add(1)
-	go func() {
+	t.runAnalysis(func() {
 		var activeRequestBodyModels []string
 		var activeRequestModels []string
 
@@ -546,8 +543,7 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 		if err != nil {
 			getLogger().Error("error processing request by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
-		t.coordinator.Done()
-	}()
+	})
 
 	interruption, err := t.Transaction.ProcessRequestBody()
 	if err != nil {
@@ -593,8 +589,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 
 	t.httpPayload.ResponseCode = code
 	t.httpPayload.ResponseProtocol = proto
-	t.coordinator.Add(1)
-	go func() {
+	t.runAnalysis(func() {
 		getLogger().Debug("processing response headers by WACE and Coraza", waceapi.LogKeyTxID, t.Transaction.ID())
 
 		var activeModels []string
@@ -611,9 +606,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 		if err != nil {
 			getLogger().Error("error processing response headers by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
-
-		t.coordinator.Done()
-	}()
+	})
 
 	interruption := t.Transaction.ProcessResponseHeaders(code, proto)
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
@@ -667,8 +660,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		t.httpPayload.ResponseBody = body
 	}
 
-	t.coordinator.Add(1)
-	go func() {
+	t.runAnalysis(func() {
 
 		var activeResponseBodyModels []string
 		var activeResponseModels []string
@@ -711,9 +703,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 		if err != nil {
 			getLogger().Error("error processing request and response by WACE", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
 		}
-
-		t.coordinator.Done()
-	}()
+	})
 
 	interruption, err := t.Transaction.ProcessResponseBody()
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
@@ -776,6 +766,27 @@ func (t WaceTransaction) Close() error {
 		errs = append(errs, fmt.Errorf("closing the transaction: %w", err))
 	}
 	return errors.Join(errs...)
+}
+
+// runAnalysis runs analyze, which dispatches the WACE model analysis for a
+// phase. With an exceptions transaction, analyze first drives the exceptions
+// transaction through its own Coraza phase, so it runs in a goroutine on
+// t.coordinator to overlap that work with the main Coraza phase; the caller
+// waits for it with t.coordinator.Wait. Without exceptions, wace.Analyze only
+// dispatches the model goroutines and returns without blocking, so analyze runs
+// inline, avoiding the goroutine and WaitGroup overhead on the hot path. The
+// model plugins still run concurrently with the main Coraza phase either way,
+// and are joined in checkTransaction.
+func (t WaceTransaction) runAnalysis(analyze func()) {
+	if !t.hasExceptions() {
+		analyze()
+		return
+	}
+	t.coordinator.Add(1)
+	go func() {
+		analyze()
+		t.coordinator.Done()
+	}()
 }
 
 // checkTransaction asks the WACE decision plugin whether to block the
