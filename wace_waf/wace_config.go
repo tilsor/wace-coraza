@@ -273,9 +273,6 @@ func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData) error {
 	if err != nil {
 		return err
 	}
-	if len(w.waceDecisionIds) == 0 {
-		return fmt.Errorf("Decision ids %s do not exist in general configuration file or they weren't loaded properly", conf.DecisionIds)
-	}
 
 	return nil
 }
