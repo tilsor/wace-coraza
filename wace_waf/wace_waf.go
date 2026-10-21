@@ -354,7 +354,23 @@ func (w *WaceWAF) NewTransactionWithID(id string) types.Transaction {
 	return t
 }
 
-// ProcessUri implements the ProcessURI interface provided by Coraza WAF to process the URI by WACE and Coraza
+// ProcessConnection implements the ProcessConnection function provided in Coraza WAF types.Transaction
+// interface, in order to process it by Coraza itself and WACE
+func (t WaceTransaction) ProcessConnection(client string, cPort int, server string, sPort int) {
+	start := time.Now()
+	t.Transaction.ProcessConnection(client, cPort, server, sPort)
+	*t.CRSExecTime += time.Since(start).Nanoseconds()
+
+	if t.hasExceptions() {
+		t.exceptionTransaction.ProcessConnection(client, cPort, server, sPort)
+	}
+
+	*t.IntegrationTime += time.Since(start).Nanoseconds()
+
+	getLogger().Debug("Connection processed", waceapi.LogKeyTxID, t.Transaction.ID())
+}
+
+// ProcessURI implements the ProcessURI interface provided by Coraza WAF to process the URI by WACE and Coraza
 func (t WaceTransaction) ProcessURI(uri string, method string, httpVersion string) {
 	start := time.Now()
 	t.Transaction.ProcessURI(uri, method, httpVersion)

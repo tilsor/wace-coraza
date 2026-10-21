@@ -1151,6 +1151,65 @@ func TestWithExceptionsFromFile(t *testing.T) {
 	}
 }
 
+// TestProcessConnectionPropagatesToExceptions verifies that ProcessConnection
+// forwards the connection data to the exceptions transaction. The exceptions
+// file disables trivialRequestHeaders only for a specific client address, which
+// is available to the exceptions WAF solely through ProcessConnection: without
+// that propagation REMOTE_ADDR would be empty and the model would stay active.
+func TestProcessConnectionPropagatesToExceptions(t *testing.T) {
+	reloadWACE(t, "testdata/config/waceconfig_all_models.yaml")
+
+	exceptionsPath := filepath.Join(t.TempDir(), "remote_addr_exceptions.conf")
+	exceptions := `SecRule REMOTE_ADDR "@streq 1.2.3.4" "id:10, phase:1, nolog, pass, t:none, setvar:tx.trivialRequestHeaders=false"`
+	if err := os.WriteFile(exceptionsPath, []byte(exceptions), 0o600); err != nil {
+		t.Fatalf("Error writing exceptions file: %v", err)
+	}
+
+	wafConf := NewWaceWAFConfig().
+		WithExceptionsFromFile(exceptionsPath).
+		WithDirectivesFromFile("testdata/config/directives.conf").
+		WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+		WithDirectivesFromFile("../coreruleset/rules/*.conf")
+
+	waf, err := NewWAF(wafConf)
+	if err != nil {
+		t.Fatalf("Error creating WAF: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		clientAddr   string
+		expectActive bool
+	}{
+		{name: "matching client disables model", clientAddr: "1.2.3.4", expectActive: false},
+		{name: "other client keeps model active", clientAddr: "5.6.7.8", expectActive: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := waf.NewTransaction()
+			defer tx.Close()
+			defer tx.ProcessLogging()
+
+			tx.ProcessConnection(tt.clientAddr, 12345, "127.0.0.1", 80)
+			tx.ProcessURI("http://localhost:8090/", "GET", "HTTP/1.1")
+			tx.AddRequestHeader("Host", "localhost")
+			if i := tx.ProcessRequestHeaders(); i != nil {
+				t.Fatalf("request headers should not be blocked, got interruption: %v", i)
+			}
+
+			activeModels, found := tx.(WaceTransaction).exceptionActiveModels(configstore.RequestHeaders)
+			if !found {
+				t.Fatal("expected the exceptions WAF to match the RequestHeaders exceptions rule")
+			}
+			isActive := reflect.DeepEqual(activeModels, []string{"trivialRequestHeaders"})
+			if isActive != tt.expectActive {
+				t.Errorf("client %s: expected model active=%v, got active models %q", tt.clientAddr, tt.expectActive, activeModels)
+			}
+		})
+	}
+}
+
 // TestWithExceptionsFromFileNotFound verifies that a missing exceptions file
 // makes WAF creation fail with an error that names the file.
 func TestWithExceptionsFromFileNotFound(t *testing.T) {
