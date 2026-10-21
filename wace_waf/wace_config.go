@@ -639,7 +639,7 @@ func parseActiveModels(exceptionRuleMessage string) []string {
 	models := strings.Split(exceptionRuleMessage, ",")
 	unexceptedModels := []string{}
 	for _, model := range models {
-		if strings.Contains(model, "true") {
+		if strings.HasSuffix(model, ":true") {
 			unexceptedModels = append(unexceptedModels, strings.Split(model, ":")[0])
 		}
 	}

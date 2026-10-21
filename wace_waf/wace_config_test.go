@@ -183,6 +183,21 @@ func TestParseUnexceptedModels(t *testing.T) {
 	}
 }
 
+// TestParseActiveModelsModelNameContainsTrue checks that a model is reported as
+// active only when its value is exactly "true", and not when the substring
+// "true" happens to appear in the model name. An excepted model resolves to an
+// empty value (e.g. "truemodel:"), so it must not be returned.
+func TestParseActiveModelsModelNameContainsTrue(t *testing.T) {
+	exceptionRuleMessage := "truemodel:,activemodel:true,"
+	models := parseActiveModels(exceptionRuleMessage)
+	if len(models) != 1 {
+		t.Fatalf("Error parsing active models: Expected 1, Got %d (%v)", len(models), models)
+	}
+	if models[0] != "activemodel" {
+		t.Errorf("Error parsing active models: Expected 'activemodel', Got %s", models[0])
+	}
+}
+
 func TestGeneralConfigLoadConfig(t *testing.T) {
 	gConfig := generalConfig{}
 	configFilePath := "testdata/config/waceconfig.yaml"
