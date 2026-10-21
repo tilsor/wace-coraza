@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -440,25 +442,7 @@ func (t WaceTransaction) ProcessRequestHeaders() *types.Interruption {
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
-		if wafScores, ok := parseScoreParams(t.MatchedRules(), "1"); ok {
-			wafParams := waceapi.WAFData{
-				Scores: wafScores,
-				Rules:  processMatchedRules(t.MatchedRules()),
-			}
-			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
-
-			if !found {
-				getLogger().Error("non-training decision plugin not found", waceapi.LogKeyTxID, t.Transaction.ID(), "decision.ids", t.waf.waceWafConfig.waceDecisionIds)
-			} else if err == nil {
-				if res && t.waf.waceWafConfig.blocking {
-					getLogger().Debug("transaction blocked", waceapi.LogKeyTxID, t.Transaction.ID())
-					interruption = &types.Interruption{Action: "deny"}
-					t.httpPayload.ResponseCode = 403
-
-					getMetrics().recordBlocked(ctx, 1)
-				}
-			}
-		}
+		interruption = t.checkTransaction(1)
 	}
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
@@ -558,36 +542,13 @@ func (t WaceTransaction) ProcessRequestBody() (*types.Interruption, error) {
 	}
 	*t.CRSExecTime += time.Since(start).Nanoseconds()
 
-	if err != nil {
-		getLogger().Error("error processing request body by Coraza", waceapi.LogKeyTxID, t.Transaction.ID(), "error", err)
-	}
-
 	t.coordinator.Wait()
 
 	// Skip the WACE check if a disruptive rule already interrupted the
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if interruption == nil {
-		if wafScores, ok := parseScoreParams(t.MatchedRules(), "2"); ok {
-			wafParams := waceapi.WAFData{
-				Scores: wafScores,
-				Rules:  processMatchedRules(t.MatchedRules()),
-			}
-			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
-
-			if !found {
-				getLogger().Error("non-training decision plugin not found", waceapi.LogKeyTxID, t.Transaction.ID(), "decision.ids", t.waf.waceWafConfig.waceDecisionIds)
-			} else if err == nil {
-				if res && t.waf.waceWafConfig.blocking {
-					getLogger().Debug("transaction blocked", waceapi.LogKeyTxID, t.Transaction.ID())
-
-					interruption = &types.Interruption{Action: "deny"}
-					t.httpPayload.ResponseCode = 403
-
-					getMetrics().recordBlocked(ctx, 2)
-				}
-			}
-		}
+		interruption = t.checkTransaction(2)
 	}
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
@@ -651,26 +612,7 @@ func (t WaceTransaction) ProcessResponseHeaders(code int, proto string) *types.I
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if t.waf.waceWafConfig.earlyBlocking && interruption == nil {
-		if wafScores, ok := parseScoreParams(t.MatchedRules(), "3"); ok {
-			wafParams := waceapi.WAFData{
-				Scores: wafScores,
-				Rules:  processMatchedRules(t.MatchedRules()),
-			}
-			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
-
-			if !found {
-				getLogger().Error("non-training decision plugin not found", waceapi.LogKeyTxID, t.Transaction.ID(), "decision.ids", t.waf.waceWafConfig.waceDecisionIds)
-			} else if err == nil {
-				if res && t.waf.waceWafConfig.blocking {
-					getLogger().Debug("transaction blocked", waceapi.LogKeyTxID, t.Transaction.ID())
-
-					interruption = &types.Interruption{Action: "deny"}
-					t.httpPayload.ResponseCode = 403
-
-					getMetrics().recordBlocked(ctx, 3)
-				}
-			}
-		}
+		interruption = t.checkTransaction(3)
 	}
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
@@ -770,26 +712,7 @@ func (t WaceTransaction) ProcessResponseBody() (*types.Interruption, error) {
 	// transaction: the reporting SecAction never ran and Coraza is already
 	// blocking the request.
 	if interruption == nil {
-		if wafScores, ok := parseScoreParams(t.MatchedRules(), "4"); ok {
-			wafParams := waceapi.WAFData{
-				Scores: wafScores,
-				Rules:  processMatchedRules(t.MatchedRules()),
-			}
-			res, found, err := wace.CheckTransaction(t.Transaction.ID(), t.waf.waceWafConfig.waceDecisionIds, wafParams)
-
-			if !found {
-				getLogger().Error("non-training decision plugin not found", waceapi.LogKeyTxID, t.Transaction.ID(), "decision.ids", t.waf.waceWafConfig.waceDecisionIds)
-			} else if err == nil {
-				if res && t.waf.waceWafConfig.blocking {
-					getLogger().Debug("transaction blocked", waceapi.LogKeyTxID, t.Transaction.ID())
-
-					interruption = &types.Interruption{Action: "deny"}
-					t.httpPayload.ResponseCode = 403
-
-					getMetrics().recordBlocked(ctx, 4)
-				}
-			}
-		}
+		interruption = t.checkTransaction(4)
 	}
 
 	*t.IntegrationTime += time.Since(start).Nanoseconds()
@@ -837,6 +760,43 @@ func (t WaceTransaction) Close() error {
 		errs = append(errs, fmt.Errorf("closing the transaction: %w", err))
 	}
 	return errors.Join(errs...)
+}
+
+// checkTransaction asks the WACE decision plugin whether to block the
+// transaction after phase, and returns the interruption to apply, or nil. If
+// there is no decision, the transaction is blocked only with fail_closed.
+// Either way, it is only blocked if blocking is enabled.
+func (t WaceTransaction) checkTransaction(phase int) *types.Interruption {
+	wafScores, ok := parseScoreParams(t.MatchedRules(), strconv.Itoa(phase))
+	if !ok {
+		return nil
+	}
+	wafParams := waceapi.WAFData{
+		Scores: wafScores,
+		Rules:  processMatchedRules(t.MatchedRules()),
+	}
+	decisionIds := t.waf.waceWafConfig.waceDecisionIds
+	block, found, err := wace.CheckTransaction(t.Transaction.ID(), decisionIds, wafParams)
+
+	logger := getLogger().With(waceapi.LogKeyTxID, t.Transaction.ID(), "phase", phase)
+	switch {
+	case err != nil:
+		logger.Error("error checking the transaction by WACE", "decision.ids", decisionIds, "error", err)
+		block = t.waf.general.failClosed
+	case !found:
+		// NewWAF rejects a WAF without a non-training decision plugin, so
+		// the general configuration changed after the WAF was created.
+		logger.Error("non-training decision plugin not found", "decision.ids", decisionIds)
+		block = t.waf.general.failClosed
+	}
+	if !block || !t.waf.waceWafConfig.blocking {
+		return nil
+	}
+
+	logger.Debug("transaction blocked", "decision.failed", err != nil || !found)
+	t.httpPayload.ResponseCode = http.StatusForbidden
+	getMetrics().recordBlocked(ctx, phase)
+	return &types.Interruption{Action: "deny", Status: 403}
 }
 
 // bodyString returns the content of a Coraza body buffer as a string. It

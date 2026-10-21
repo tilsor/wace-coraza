@@ -34,6 +34,9 @@ type generalConfig struct {
 	// version identifies the part of the configuration that WAFs are
 	// built with. It is returned by ConfigVersion.
 	version string
+	// failClosed makes WACE WAF block the transactions whose decision
+	// fails, instead of letting them through.
+	failClosed bool
 }
 
 // WaceWAFConfig implements the WAFConfig interface and adds the specific configuration for the WaceWAF.
@@ -65,6 +68,7 @@ type waceGeneralConfigFileData struct {
 	Blocking          bool           `yaml:"blocking"`
 	OtelURL           string         `yaml:"otel_url"`
 	ExceptionIDs      map[string]int `yaml:"exception_ids"`
+	FailClosed        bool           `yaml:"fail_closed"`
 }
 
 // WaceAppConfigFileData holds the application configuration data from the config file
@@ -140,6 +144,7 @@ func jsonHash(v any) (string, error) {
 type wafVersionData struct {
 	EarlyBlocking   bool
 	Blocking        bool
+	FailClosed      bool
 	DefaultDecision string
 	ModelPlugins    map[string]wafVersionModel
 	DecisionPlugins map[string]bool
@@ -183,6 +188,7 @@ func readGeneralConfig() (*generalConfig, waceGeneralConfigFileData, error) {
 	version := wafVersionData{
 		EarlyBlocking:   g.earlyBlocking,
 		Blocking:        g.blocking,
+		FailClosed:      g.failClosed,
 		DefaultDecision: g.waceDecision,
 		ModelPlugins:    map[string]wafVersionModel{},
 		DecisionPlugins: map[string]bool{},
@@ -227,6 +233,7 @@ func (g *generalConfig) LoadConfig(config []byte) (waceGeneralConfigFileData, er
 	g.crsVersion = confData.CRSVersion
 	g.blocking = confData.Blocking
 	g.otelURL = confData.OtelURL
+	g.failClosed = confData.FailClosed
 	g.ruleIdsForExceptions, err = exceptionRuleIDs(confData.ExceptionIDs)
 	if err != nil {
 		return waceGeneralConfigFileData{}, err
@@ -341,18 +348,25 @@ func newWacePluginsConfig(modelsIds []string, decisionIds []string) (WaceModels,
 		}
 	}
 
+	// The WACE core takes exactly one non-training decision plugin: it
+	// fails every check with none or with more than one.
 	checkedDecisionIds := []string{}
-	activeFound := false
+	activeIds := []string{}
 	for _, id := range decisionIds {
 		if dp, ok := config.DecisionPlugins[id]; ok {
 			checkedDecisionIds = append(checkedDecisionIds, id)
-			activeFound = activeFound || !dp.Training
+			if !dp.Training {
+				activeIds = append(activeIds, id)
+			}
 		} else {
 			err = errors.Join(err, fmt.Errorf("Unknown decision: %s", id))
 		}
 	}
-	if !activeFound {
+	switch {
+	case len(activeIds) == 0:
 		err = errors.Join(err, fmt.Errorf("Non-training decision plugin not found"))
+	case len(activeIds) > 1:
+		err = errors.Join(err, fmt.Errorf("Multiple non-training decision plugins: %s", activeIds))
 	}
 	return models, checkedDecisionIds, err
 }

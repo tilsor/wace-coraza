@@ -17,6 +17,7 @@ import (
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
+	wace "github.com/tilsor/ModSecIntl_wace_lib"
 	"github.com/tilsor/ModSecIntl_wace_lib/configstore"
 	"github.com/tilsor/ModSecIntl_wace_lib/waceapi"
 )
@@ -195,6 +196,12 @@ func TestReloadChangedConfig(t *testing.T) {
 			name:           "early blocking",
 			old:            "early_blocking: true",
 			new:            "early_blocking: false",
+			versionChanges: true,
+		},
+		{
+			name:           "fail closed",
+			old:            "early_blocking: true",
+			new:            "early_blocking: true\nfail_closed: true",
 			versionChanges: true,
 		},
 	}
@@ -1634,5 +1641,62 @@ func TestBodiesOnlyReadForModels(t *testing.T) {
 	}
 	if payload.ResponseBody != "" {
 		t.Errorf("expected no response body without response body models, got %q", payload.ResponseBody)
+	}
+}
+
+// TestCheckTransactionFailClosed verifies that a transaction whose decision
+// fails is let through by default and blocked with fail_closed, and that
+// fail_closed does not block when blocking is disabled.
+func TestCheckTransactionFailClosed(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig_block_transaction.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+	tests := []struct {
+		name       string
+		failClosed bool
+		blocking   bool
+		wantBlock  bool
+	}{
+		{name: "fail open", failClosed: false, blocking: true, wantBlock: false},
+		{name: "fail closed", failClosed: true, blocking: true, wantBlock: true},
+		{name: "fail closed without blocking", failClosed: true, blocking: false, wantBlock: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := strings.Replace(string(data), "blocking: true\n",
+				fmt.Sprintf("blocking: %t\nfail_closed: %t\n", tt.blocking, tt.failClosed), 1)
+			resetWACE()
+			t.Cleanup(resetWACE)
+			writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(conf))
+			if err := Reload(nil); err != nil {
+				t.Fatalf("Error initializing WACE: %v", err)
+			}
+
+			// The anomaly score is below the threshold: the transaction is
+			// only blocked if the decision fails and fail_closed is set.
+			wafConf := NewWAFConfig().WithDirectivesFromFile("testdata/config/directives.conf").
+				WithDirectivesFromFile("../coreruleset/crs-setup.conf.example").
+				WithDirectivesFromFile("../coreruleset/rules/*.conf").
+				WithDirectives("SecAction \"id:15,phase:1,pass,nolog,setvar:'tx.blocking_inbound_anomaly_score=0',setvar:'tx.inbound_anomaly_score_threshold=5'\"")
+			waf, err := NewWAF(wafConf)
+			if err != nil {
+				t.Fatalf("Error creating WAF: %v", err)
+			}
+
+			tx := waf.NewTransaction()
+			defer tx.Close()
+			tx.ProcessURI("http://localhost:8090", "GET", "HTTP/1.1")
+			// Removing the transaction from the WACE core makes the check fail.
+			wace.CloseTransaction(tx.ID())
+
+			i := tx.ProcessRequestHeaders()
+			if gotBlock := i != nil; gotBlock != tt.wantBlock {
+				t.Fatalf("expected blocked=%t, got interruption %v", tt.wantBlock, i)
+			}
+			if tt.wantBlock && i.Status != 403 {
+				t.Errorf("expected status 403, got %d", i.Status)
+			}
+		})
 	}
 }

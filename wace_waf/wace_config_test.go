@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -566,6 +567,39 @@ func TestNewWAFWithWaceAppConfigUnknownDecision(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Error applying waceAppConfig") {
 		t.Errorf("expected an error applying the waceAppConfig, got: %v", err)
+	}
+}
+
+// TestNewWAFWithWaceAppConfigMultipleDecisions verifies that WAF creation
+// fails if the app config has more than one non-training decision plugin,
+// since the WACE core would fail every check of its transactions.
+func TestNewWAFWithWaceAppConfigMultipleDecisions(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+	second := "  - id: \"weighted_sum2\"\n    path: \"testdata/plugins/weighted_sum.so\"\n    waf_weight: 0.5\n\n"
+	multiple := strings.Replace(string(data), "crs_version:", second+"crs_version:", 1)
+
+	resetWACE()
+	t.Cleanup(resetWACE)
+	writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(multiple))
+	if err := Reload(nil); err != nil {
+		t.Fatalf("Error initializing WACE: %v", err)
+	}
+
+	wafConfig := NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{
+			ModelIds:    []string{"trivial"},
+			DecisionIds: []string{"weighted_sum", "weighted_sum2"},
+			DisableCRS:  true,
+		})
+	_, err = NewWAF(wafConfig)
+	if err == nil {
+		t.Fatal("expected WAF creation to fail with multiple non-training decision plugins")
+	}
+	if !strings.Contains(err.Error(), "Multiple non-training decision plugins") {
+		t.Errorf("expected a multiple decision plugins error, got: %v", err)
 	}
 }
 
