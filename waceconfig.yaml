@@ -41,6 +41,9 @@ crs_version: "4.4.0-dev"
 early_blocking: false
 blocking: true
 
+# Default time bound for synchronous model plugins (0 disables the timeout).
+model_timeout: 200ms
+
 exception_ids:
   RequestHeaders: 100
   RequestBody: 200

@@ -25,27 +25,37 @@ Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF
 **Plugins configuration**
 - model_plugins: Defines the plugins used for processing transactions.
   - id (String): a unique identifier for each model plugin.
-  - plugintype (String): Specifies the plugin type. Possible values include "RequestHeaders", "RequestBody", "AllRequest", "ResponseHeaders", "ResponseBody", and "AllResponse".
+  - plugin_type (String): Specifies the plugin type. Possible values are "RequestHeaders", "RequestBody", "AllRequest", "ResponseHeaders", "ResponseBody", "AllResponse", and "Everything".
   - path (String): file path to the plugin executable file.
-  - weight (Float): defines the weight of this plugin in scoring decisions.
-  - mode (String): execution mode, values can be "sync" or "async".
+  - async (Boolean): execution mode. When true, the plugin is evaluated asynchronously and its result is not awaited within the request; when false (the default), it is evaluated synchronously during the transaction.
   - remote (Boolean): indicates whether the plugin is executed through NATS.
+  - sanitize (Boolean): when true, the headers listed in `credential_headers` are stripped from the data sent to this plugin.
+  - timeout (Duration, optional): per-plugin override of the model timeout. `0` means no timeout. When unset, `model_timeout` (sync plugins) or `async_model_timeout` (async plugins) applies.
+  - training (Boolean): when true, the plugin is used only for data collection and is not applied to applications by default.
+  - training_data: data-collection parameters, used when `training` is true (`min_samples`, `max_samples`, `result_file_path`, `status_file_path`, `status_update_interval`).
+  - params: plugin-specific parameters passed to the plugin.
 
 - decision_plugins: contains plugins used to determine final actions based on model plugin outputs.
   - id (String): identifier for each decision plugin.
   - path (String): file path to the plugin executable file.
+  - model_weights (Map): weight assigned to each model plugin's score in decision scoring, keyed by model id.
+  - waf_weight (Float): weight assigned to the WAF (CRS) anomaly score in decision scoring.
+  - timeout (Duration, optional): bounds each call to the plugin. `0` means no timeout. See `fail_closed` for what happens when it is exceeded.
+  - training (Boolean), training_data: as in model plugins.
   - params: Contains parameters for decision-making logic.
-    - waf_weight (String): weight assigned to Web Application Firewall (WAF) in decision scoring.
     - threshold (String): minimum threshold score to apply the decision plugin’s result.
 
 **Network and Options**
 
-- natsurl (String): URL for the NATS server, which handles messaging between components. Default format is hostname:port.
+- nats_url (String): URL for the NATS server, which handles messaging between components. Default format is hostname:port.
+- credential_headers (List of String, optional): the header names stripped from the data sent to model plugins that have `sanitize` enabled. Default `["authorization", "cookie", "set-cookie"]`.
+- model_timeout (Duration, optional): default time bound for synchronous model plugins. When omitted, the default (200ms) is used; `0` disables the timeout. A model plugin's own `timeout` overrides it.
+- async_model_timeout (Duration, optional): default time bound for asynchronous model plugins. When omitted, the default (60s) is used; `0` disables the timeout. A model plugin's own `timeout` overrides it.
 - otel_url (String, optional): address of the OTLP gRPC receiver of an OpenTelemetry Collector, as `host:port` (e.g. `localhost:4317`). When set, the metrics of WACE WAF and of the WACE core are exported there every 2 seconds, without TLS. When empty or missing, no metrics are recorded. It can be changed by a reload: the new address is used once the new configuration is accepted, and the metrics still pending for the old one are flushed.
-- crs_version (String): version of the OWASP CRS in use.
+- crs_version (String): version of the OWASP CRS in use. When it is empty, WACE injects no CRS integration directives at all (the same effect as `disable_crs` applied to every application), so the CRS ruleset does not need to be loaded.
 - early_blocking (Boolean): enables or disables early blocking of requests.
-- blocking (Boolean): enables or disables denying transactions based on the WACE decision plugin's result. When false, transactions are still analyzed and scored, but never denied. If a per-app waceappconfig.yaml is used, its own `blocking` value takes priority over this one.
-- fail_closed (Boolean, optional, default false): when true, transactions are denied if the WACE decision plugin cannot decide (e.g. it fails or times out). When false, they are let through. It only has effect when `blocking` is enabled.
+- blocking (Boolean): enables or disables denying transactions based on the WACE decision plugin's result. When false, transactions are still analyzed and scored, but never denied. This is independent of Coraza's `SecRuleEngine` directive: `SecRuleEngine` governs whether the CRS/SecLang rules deny a transaction, while `blocking` governs whether the WACE decision denies it. If a per-app waceappconfig.yaml is used, its own `blocking` value takes priority over this one.
+- fail_closed (Boolean, optional, default false): when true, transactions are denied if the WACE decision plugin cannot decide (e.g. it fails or exceeds the decision plugin's `timeout`). When false, they are let through. It only has effect when `blocking` is enabled. It governs the decision plugin's timeout and failures only; it does not apply to `model_timeout` or `async_model_timeout` (a model plugin that times out does not, by itself, block the transaction).
 
 **Rule IDs for Exceptions**
 
@@ -61,8 +71,8 @@ Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF
   WACE also adds a rule with ID 9000000 before the exceptions file, which marks every model as active; it cannot be configured.
 
 ### File: <app>waceappconfig.yaml
-- modelids (List): a list of model plugin IDs to be applied in this application. Each ID SHOULD match a modelplugin defined in the main configuration.
-- decisionid (String): specifies the ID of the decision plugin to use. This ID should correspond to one in the decisionplugins section of the main configuration.
+- model_ids (List): a list of model plugin IDs to be applied in this application. Each ID SHOULD match a model plugin defined in the main configuration.
+- decision_ids (List): the IDs of the decision plugins to use. Each ID should correspond to one in the `decision_plugins` section of the main configuration. Exactly one must be a non-training decision plugin.
 - early_blocking (Boolean): overrides the general config's early_blocking for this application.
 - disable_crs (Boolean): when true, skips injecting the OWASP CRS-specific directives (CRS blocking-rule neutralization and anomaly-score reporting rules) for this application, so the CRS ruleset does not need to be loaded at all. Custom SecLang rules (e.g. virtual patches) are unaffected and still apply.
 - blocking (Boolean): overrides the general config's blocking for this application.
@@ -75,6 +85,21 @@ This file defines models exception using SecLang syntax. In order to except a pa
   setvar:tx.<model_id>=false
   ```
 By default, all models defined in the configuration are applied to each transaction.
+
+## Metrics
+
+When `otel_url` is set, WACE WAF exports the following metrics (alongside the WACE core's own) to the OpenTelemetry Collector every 2 seconds. The duration histograms share the same bucket boundaries, from 100µs to 10s.
+
+| Metric | Instrument | Unit | Attributes | Description |
+| --- | --- | --- | --- | --- |
+| `wace.waf.exceptions.duration` | Histogram | s | `phase` | Time from the start of a phase until its exceptions are evaluated and the active models known. |
+| `wace.waf.request.body.read.duration` | Histogram | s | — | Time spent reading the request body. |
+| `wace.waf.response.body.write.duration` | Histogram | s | — | Time spent writing a chunk of the response body. |
+| `wace.waf.crs.duration` | Histogram | s | — | Time spent by Coraza processing a transaction. |
+| `wace.waf.integration.duration` | Histogram | s | — | Time spent by WACE WAF processing a transaction, Coraza included. |
+| `wace.waf.transaction.duration` | Histogram | s | — | Time from the creation of a transaction until it is logged. |
+| `wace.waf.transaction.processed` | Counter | `{transaction}` | `http.response.status_code` | Transactions logged, by response status code. |
+| `wace.waf.transaction.blocked` | Counter | `{transaction}` | `phase` | Transactions blocked by the WACE decision, by phase. |
 
 ## Contributing
 
