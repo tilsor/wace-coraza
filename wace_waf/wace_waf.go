@@ -859,8 +859,10 @@ func (t WaceTransaction) needsRequestBody() bool {
 		(t.hasExceptions() && t.hasModels(requestBodyExceptionTypes))
 }
 
-// needsResponseBody reports whether the response body has to be read from
-// the Coraza buffer: a model gets it, or an exception rule may inspect it.
+// needsResponseBody reports whether the response body has to be read from the
+// Coraza buffer: a model gets it, or an exception rule may inspect it. No
+// exceptions clause is needed because the response-body exception and model
+// types are equivalent, unlike for the request body.
 func (t WaceTransaction) needsResponseBody() bool {
 	return t.hasModels(responseBodyModelTypes)
 }
