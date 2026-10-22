@@ -277,7 +277,8 @@ func loadConfig(configFilePath string) (WaceAppConfigFileData, error) {
 
 // loadWaceAppConfig applies the WACE App configuration to the WAF config and
 // validates its models and decision plugins against the general configuration.
-// defaultDecision is used when the app config has no decision_ids.
+// defaultDecision is used when the app config has no decision_ids, unless it
+// is empty, which is only allowed without crs_version.
 func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData, defaultDecision string) error {
 	w.disableCRS = conf.DisableCRS
 	w.earlyBlocking = conf.EarlyBlocking
@@ -285,7 +286,7 @@ func (w *WaceWAFConfig) loadWaceAppConfig(conf WaceAppConfigFileData, defaultDec
 
 	var err error
 	decisionIds := conf.DecisionIds
-	if len(decisionIds) == 0 {
+	if len(decisionIds) == 0 && defaultDecision != "" {
 		decisionIds = []string{defaultDecision}
 	}
 	w.waceModels, w.waceDecisionIds, err = newWacePluginsConfig(conf.ModelIds, decisionIds)
@@ -325,6 +326,11 @@ func getDefaultPlugins(loadedConf waceGeneralConfigFileData) (WaceModels, string
 
 	id := loadedConf.DefaultDecision
 	if id == "" {
+		// Without crs_version the CRS reporting rules are not injected, so
+		// the decision plugin is never called.
+		if loadedConf.CRSVersion == "" {
+			return models, "", nil
+		}
 		return WaceModels{}, "", fmt.Errorf("default_decision is required")
 	}
 	for _, dp := range loadedConf.DecisionPlugins {
@@ -369,7 +375,8 @@ func newWacePluginsConfig(modelsIds []string, decisionIds []string) (WaceModels,
 	}
 
 	// The WACE core takes exactly one non-training decision plugin: it
-	// fails every check with none or with more than one.
+	// fails every check with none or with more than one. No decision ids
+	// means there is no crs_version, so the decision plugin is never called.
 	checkedDecisionIds := []string{}
 	activeIds := []string{}
 	for _, id := range decisionIds {
@@ -383,7 +390,7 @@ func newWacePluginsConfig(modelsIds []string, decisionIds []string) (WaceModels,
 		}
 	}
 	switch {
-	case len(activeIds) == 0:
+	case len(activeIds) == 0 && len(decisionIds) > 0:
 		err = errors.Join(err, fmt.Errorf("Non-training decision plugin not found"))
 	case len(activeIds) > 1:
 		err = errors.Join(err, fmt.Errorf("Multiple non-training decision plugins: %s", activeIds))

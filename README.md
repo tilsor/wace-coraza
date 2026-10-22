@@ -45,7 +45,7 @@ Logging is not configured in this file. `NewWAF` uses the logger set by `waceWAF
   - params: Contains parameters for decision-making logic.
     - threshold (String): minimum threshold score to apply the decision plugin’s result.
 
-- default_decision (String, required): the ID of the decision plugin used by the applications without a waceappconfig.yaml and by those whose waceappconfig.yaml has no `decision_ids`. It must be a non-training plugin declared in `decision_plugins`; otherwise the configuration is rejected when it is loaded. It can be changed by a reload.
+- default_decision (String, required unless `crs_version` is empty): the ID of the decision plugin used by the applications without a waceappconfig.yaml and by those whose waceappconfig.yaml has no `decision_ids`. It must be a non-training plugin declared in `decision_plugins`; otherwise the configuration is rejected when it is loaded. It can be changed by a reload. Without `crs_version` the decision plugin is never called, so it can be left out; if it is set, it is still validated.
 
 **Network and Options**
 
