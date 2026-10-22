@@ -304,7 +304,10 @@ func (w *WaceWAFConfig) LoadConfigFromGeneralConfig(g generalConfig) {
 	w.earlyBlocking = g.earlyBlocking
 	w.blocking = g.blocking
 	w.waceModels = g.waceModels
-	w.waceDecisionIds = []string{g.waceDecision}
+	w.waceDecisionIds = []string{}
+	if g.waceDecision != "" {
+		w.waceDecisionIds = []string{g.waceDecision}
+	}
 }
 
 // getDefaultPlugins gets the non-training model plugin IDs and the
