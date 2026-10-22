@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	github.com/corazawaf/coraza/v3 v3.8.1
 	github.com/magefile/mage v1.17.2
-	github.com/tilsor/ModSecIntl_wace_lib v1.0.3-0.20261009183816-55db53645ed0
+	github.com/tilsor/ModSecIntl_wace_lib v1.0.3
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
@@ -28,7 +28,7 @@ require (
 	github.com/kaptinlin/jsonpointer v0.4.20 // indirect
 	github.com/kaptinlin/jsonschema v0.7.11 // indirect
 	github.com/kaptinlin/messageformat-go v0.6.0 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/nats-io/nats.go v1.54.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
