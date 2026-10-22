@@ -661,6 +661,49 @@ func TestNewWAFWithWaceAppConfigMultipleDecisions(t *testing.T) {
 	}
 }
 
+// TestNewWAFWithoutCRSVersion verifies that without crs_version the
+// default_decision is not required, since the decision plugin is never
+// called, both for WAFs without an app config and for app configs without
+// decision_ids.
+func TestNewWAFWithoutCRSVersion(t *testing.T) {
+	data, err := os.ReadFile("testdata/config/waceconfig.yaml")
+	if err != nil {
+		t.Fatalf("Error reading general config: %v", err)
+	}
+	conf := string(data)
+	for _, line := range []string{"default_decision: \"weighted_sum\"\n", "crs_version: \"4.4.0-dev\"\n"} {
+		changed := strings.Replace(conf, line, "", 1)
+		if changed == conf {
+			t.Fatalf("the general config testdata does not have %q", line)
+		}
+		conf = changed
+	}
+
+	resetWACE()
+	t.Cleanup(resetWACE)
+	writeGeneralConfig(t, filepath.Join(t.TempDir(), "waceconfig.yaml"), []byte(conf))
+	if err := Reload(nil); err != nil {
+		t.Fatalf("Error initializing WACE without crs_version and default_decision: %v", err)
+	}
+
+	waf, err := NewWAF(NewWaceWAFConfig())
+	if err != nil {
+		t.Fatalf("Error creating WAF without app config: %v", err)
+	}
+	if len(waf.waceWafConfig.waceDecisionIds) != 0 {
+		t.Errorf("without app config, expected no decision ids, got %v", waf.waceWafConfig.waceDecisionIds)
+	}
+
+	waf, err = NewWAF(NewWaceWAFConfig().
+		WithWaceAppConfig(WaceAppConfigFileData{ModelIds: []string{"trivial"}}))
+	if err != nil {
+		t.Fatalf("Error creating WAF with an app config without decision_ids: %v", err)
+	}
+	if len(waf.waceWafConfig.waceDecisionIds) != 0 {
+		t.Errorf("with an app config without decision_ids, expected no decision ids, got %v", waf.waceWafConfig.waceDecisionIds)
+	}
+}
+
 // TestNewWAFDefaultDecision verifies that the default_decision of the
 // general config, and not the first non-training decision plugin, is used
 // by the WAFs without an app config and by the app configs without
